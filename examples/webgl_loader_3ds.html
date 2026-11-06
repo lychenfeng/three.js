@@ -4,26 +4,38 @@
 		<title>three.js webgl - loaders - 3DS loader</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgl - loaders - 3DS loader">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgl_loader_3ds.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgl_loader_3ds.jpg">
 		<link type="text/css" rel="stylesheet" href="main.css">
 	</head>
 
 	<body>
 		<div id="info">
-			<a href="http://threejs.org" target="_blank" rel="noopener">three.js</a> - 3DS loader
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - 3DS loader
 		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
 
 		<script type="module">
 
-			import * as THREE from '../build/three.module.js';
+			import * as THREE from 'three';
 
-			import { TrackballControls } from './jsm/controls/TrackballControls.js';
-			import { TDSLoader } from './jsm/loaders/TDSLoader.js';
+			import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
+			import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
 
-			var container, controls;
-			var camera, scene, renderer;
+			let container, controls;
+			let camera, scene, renderer;
 
 			init();
-			animate();
 
 			function init() {
 
@@ -34,17 +46,16 @@
 				camera.position.z = 2;
 
 				scene = new THREE.Scene();
-				scene.add( new THREE.HemisphereLight() );
+				scene.add( new THREE.AmbientLight( 0xffffff, 3 ) );
 
-				var directionalLight = new THREE.DirectionalLight( 0xffeedd );
+				const directionalLight = new THREE.DirectionalLight( 0xffeedd, 3 );
 				directionalLight.position.set( 0, 0, 2 );
 				scene.add( directionalLight );
 
 				//3ds files dont store normal maps
-				var loader = new THREE.TextureLoader();
-				var normal = loader.load( 'models/3ds/portalgun/textures/normal.jpg' );
+				const normal = new THREE.TextureLoader().load( 'models/3ds/portalgun/textures/normal.jpg' );
 
-				var loader = new TDSLoader( );
+				const loader = new TDSLoader( );
 				loader.setResourcePath( 'models/3ds/portalgun/textures/' );
 				loader.load( 'models/3ds/portalgun/portalgun.3ds', function ( object ) {
 
@@ -52,6 +63,7 @@
 
 						if ( child.isMesh ) {
 
+							child.material.specular.setScalar( 0.1 );
 							child.material.normalMap = normal;
 
 						}
@@ -62,14 +74,15 @@
 
 				} );
 
-				renderer = new THREE.WebGLRenderer();
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
 				container.appendChild( renderer.domElement );
 
 				controls = new TrackballControls( camera, renderer.domElement );
 
-				window.addEventListener( 'resize', resize, false );
+				window.addEventListener( 'resize', resize );
 
 			}
 
@@ -86,8 +99,6 @@
 
 				controls.update();
 				renderer.render( scene, camera );
-
-				requestAnimationFrame( animate );
 
 			}
 		</script>

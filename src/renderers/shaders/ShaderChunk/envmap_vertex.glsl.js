@@ -9,7 +9,7 @@ export default /* glsl */`
 
 		vec3 cameraToVertex;
 
-		if ( isOrthographic ) { 
+		if ( isOrthographic ) {
 
 			cameraToVertex = normalize( vec3( - viewMatrix[ 0 ][ 2 ], - viewMatrix[ 1 ][ 2 ], - viewMatrix[ 2 ][ 2 ] ) );
 
@@ -19,7 +19,7 @@ export default /* glsl */`
 
 		}
 
-		vec3 worldNormal = inverseTransformDirection( transformedNormal, viewMatrix );
+		vec3 worldNormal = transformNormalByInverseViewMatrix( transformedNormal, viewMatrix );
 
 		#ifdef ENVMAP_MODE_REFLECTION
 

@@ -4,12 +4,16 @@
 		<title>three.js webgl - raw shader</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgl - raw shader">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgl_buffergeometry_rawshader.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgl_buffergeometry_rawshader.jpg">
 		<link type="text/css" rel="stylesheet" href="main.css">
 	</head>
 	<body>
 
 		<div id="container"></div>
-		<div id="info"><a href="http://threejs.org" target="_blank" rel="noopener">three.js</a> - raw shader demo</div>
+		<div id="info"><a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - raw shader demo</div>
 
 		<script id="vertexShader" type="x-shader/x-vertex">
 
@@ -57,18 +61,26 @@
 
 		</script>
 
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
 		<script type="module">
 
-			import * as THREE from '../build/three.module.js';
+			import * as THREE from 'three';
 
-			import Stats from './jsm/libs/stats.module.js';
+			import Stats from 'three/addons/libs/stats.module.js';
 
-			var container, stats;
+			let container, stats;
 
-			var camera, scene, renderer;
+			let camera, scene, renderer;
 
 			init();
-			animate();
 
 			function init() {
 
@@ -82,14 +94,14 @@
 
 				// geometry
 				// nr of triangles with 3 vertices per triangle
-				var vertexCount = 200 * 3;
+				const vertexCount = 200 * 3;
 
-				var geometry = new THREE.BufferGeometry();
+				const geometry = new THREE.BufferGeometry();
 
-				var positions = [];
-				var colors = [];
+				const positions = [];
+				const colors = [];
 
-				for ( var i = 0; i < vertexCount; i ++ ) {
+				for ( let i = 0; i < vertexCount; i ++ ) {
 
 					// adding x,y,z
 					positions.push( Math.random() - 0.5 );
@@ -104,8 +116,8 @@
 
 				}
 
-				var positionAttribute = new THREE.Float32BufferAttribute( positions, 3 );
-				var colorAttribute = new THREE.Uint8BufferAttribute( colors, 4 );
+				const positionAttribute = new THREE.Float32BufferAttribute( positions, 3 );
+				const colorAttribute = new THREE.Uint8BufferAttribute( colors, 4 );
 
 				colorAttribute.normalized = true; // this will map the buffer values to 0.0f - +1.0f in the shader
 
@@ -114,7 +126,7 @@
 
 				// material
 
-				var material = new THREE.RawShaderMaterial( {
+				const material = new THREE.RawShaderMaterial( {
 
 					uniforms: {
 						time: { value: 1.0 }
@@ -126,18 +138,19 @@
 
 				} );
 
-				var mesh = new THREE.Mesh( geometry, material );
+				const mesh = new THREE.Mesh( geometry, material );
 				scene.add( mesh );
 
 				renderer = new THREE.WebGLRenderer();
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
 				container.appendChild( renderer.domElement );
 
 				stats = new Stats();
 				container.appendChild( stats.dom );
 
-				window.addEventListener( 'resize', onWindowResize, false );
+				window.addEventListener( 'resize', onWindowResize );
 
 			}
 
@@ -154,23 +167,16 @@
 
 			function animate() {
 
-				requestAnimationFrame( animate );
+				const time = performance.now();
 
-				render();
-				stats.update();
-
-			}
-
-			function render() {
-
-				var time = performance.now();
-
-				var object = scene.children[ 0 ];
+				const object = scene.children[ 0 ];
 
 				object.rotation.y = time * 0.0005;
 				object.material.uniforms.time.value = time * 0.005;
 
 				renderer.render( scene, camera );
+
+				stats.update();
 
 			}
 

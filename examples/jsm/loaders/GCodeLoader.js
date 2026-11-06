@@ -1,62 +1,110 @@
-/**
- * GCodeLoader is used to load gcode files usually used for 3D printing or CNC applications.
- *
- * Gcode files are composed by commands used by machines to create objects.
- *
- * @class GCodeLoader
- * @param {Manager} manager Loading manager.
- * @author tentone
- * @author joewalnes
- */
-
 import {
 	BufferGeometry,
-	Euler,
 	FileLoader,
 	Float32BufferAttribute,
 	Group,
 	LineBasicMaterial,
 	LineSegments,
 	Loader
-} from "../../../build/three.module.js";
+} from 'three';
 
-var GCodeLoader = function ( manager ) {
+/**
+ * A loader for the GCode format.
+ *
+ * GCode files are usually used for 3D printing or CNC applications.
+ *
+ * ```js
+ * const loader = new GCodeLoader();
+ * const object = await loader.loadAsync( 'models/gcode/benchy.gcode' );
+ * scene.add( object );
+ * ```
+ *
+ * @augments Loader
+ * @three_import import { GCodeLoader } from 'three/addons/loaders/GCodeLoader.js';
+ */
+class GCodeLoader extends Loader {
 
-	Loader.call( this, manager );
+	/**
+	 * Constructs a new GCode loader.
+	 *
+	 * @param {LoadingManager} [manager] - The loading manager.
+	 */
+	constructor( manager ) {
 
-	this.splitLayer = false;
+		super( manager );
 
-};
+		/**
+		 * Whether to split layers or not.
+		 *
+		 * @type {boolean}
+		 * @default false
+		 */
+		this.splitLayer = false;
 
-GCodeLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
+	}
 
-	constructor: GCodeLoader,
+	/**
+	 * Starts loading from the given URL and passes the loaded GCode asset
+	 * to the `onLoad()` callback.
+	 *
+	 * @param {string} url - The path/URL of the file to be loaded. This can also be a data URI.
+	 * @param {function(Group)} onLoad - Executed when the loading process has been finished.
+	 * @param {onProgressCallback} onProgress - Executed while the loading is in progress.
+	 * @param {onErrorCallback} onError - Executed when errors occur.
+	 */
+	load( url, onLoad, onProgress, onError ) {
 
-	load: function ( url, onLoad, onProgress, onError ) {
+		const scope = this;
 
-		var self = this;
-
-		var loader = new FileLoader( self.manager );
-		loader.setPath( self.path );
+		const loader = new FileLoader( scope.manager );
+		loader.setPriority( scope.priority );
+		loader.setCache( scope.cache );
+		loader.setPath( scope.path );
+		loader.setRequestHeader( scope.requestHeader );
+		loader.setWithCredentials( scope.withCredentials );
 		loader.load( url, function ( text ) {
 
-			onLoad( self.parse( text ) );
+			try {
+
+				onLoad( scope.parse( text ) );
+
+			} catch ( e ) {
+
+				if ( onError ) {
+
+					onError( e );
+
+				} else {
+
+					console.error( e );
+
+				}
+
+				scope.manager.itemError( url );
+
+			}
 
 		}, onProgress, onError );
 
-	},
+	}
 
-	parse: function ( data ) {
+	/**
+	 * Parses the given GCode data and returns a group with lines.
+	 *
+	 * @param {string} data - The raw Gcode data as a string.
+	 * @return {Group} The parsed GCode asset.
+	 */
+	parse( data ) {
 
-		var state = { x: 0, y: 0, z: 0, e: 0, f: 0, extruding: false, relative: false };
-		var layers = [];
+		let state = { x: 0, y: 0, z: 0, e: 0, f: 0, extruding: false, relative: false, extrusionOverride: false, extrusionRelative: false };
+		const layers = [];
 
-		var currentLayer = undefined;
+		let currentLayer = undefined;
 
-		var pathMaterial = new LineBasicMaterial( { color: 0xFF0000 } );
+		const pathMaterial = new LineBasicMaterial( { color: 0xFF0000 } );
 		pathMaterial.name = 'path';
 
-		var extrudingMaterial = new LineBasicMaterial( { color: 0x00FF00 } );
+		const extrudingMaterial = new LineBasicMaterial( { color: 0x00FF00 } );
 		extrudingMaterial.name = 'extruded';
 
 		function newLayer( line ) {
@@ -75,7 +123,7 @@ GCodeLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			}
 
-			if ( line.extruding ) {
+			if ( state.extruding ) {
 
 				currentLayer.vertex.push( p1.x, p1.y, p1.z );
 				currentLayer.vertex.push( p2.x, p2.y, p2.z );
@@ -89,33 +137,35 @@ GCodeLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		}
 
-		function delta( v1, v2 ) {
-
-			return state.relative ? v2 : v2 - v1;
-
-		}
-
 		function absolute( v1, v2 ) {
 
 			return state.relative ? v1 + v2 : v2;
 
 		}
 
-		var lines = data.replace( /;.+/g, '' ).split( '\n' );
+		function absoluteExtrusion( v1, v2 ) {
 
-		for ( var i = 0; i < lines.length; i ++ ) {
+			const relative = state.extrusionOverride ? state.extrusionRelative : state.relative;
 
-			var tokens = lines[ i ].split( ' ' );
-			var cmd = tokens[ 0 ].toUpperCase();
+			return relative ? v1 + v2 : v2;
 
-			//Argumments
-			var args = {};
+		}
+
+		const lines = data.replace( /;.+/g, '' ).split( '\n' );
+
+		for ( let i = 0; i < lines.length; i ++ ) {
+
+			const tokens = lines[ i ].trim().split( /\s+/ );
+			const cmd = tokens[ 0 ].toUpperCase();
+
+			//Arguments
+			const args = {};
 			tokens.splice( 1 ).forEach( function ( token ) {
 
 				if ( token[ 0 ] !== undefined ) {
 
-					var key = token[ 0 ].toLowerCase();
-					var value = parseFloat( token.substring( 1 ) );
+					const key = token[ 0 ].toLowerCase();
+					const value = parseFloat( token.substring( 1 ) );
 					args[ key ] = value;
 
 				}
@@ -126,18 +176,18 @@ GCodeLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 			//G0/G1 – Linear Movement
 			if ( cmd === 'G0' || cmd === 'G1' ) {
 
-				var line = {
-					x: args.x !== undefined ? absolute( state.x, args.x ) : state.x,
-					y: args.y !== undefined ? absolute( state.y, args.y ) : state.y,
-					z: args.z !== undefined ? absolute( state.z, args.z ) : state.z,
-					e: args.e !== undefined ? absolute( state.e, args.e ) : state.e,
-					f: args.f !== undefined ? absolute( state.f, args.f ) : state.f,
-				};
+				const line = Object.assign( {}, state ); // clone state
+
+				if ( args.x !== undefined ) line.x = absolute( state.x, args.x );
+				if ( args.y !== undefined ) line.y = absolute( state.y, args.y );
+				if ( args.z !== undefined ) line.z = absolute( state.z, args.z );
+				if ( args.e !== undefined ) line.e = absoluteExtrusion( state.e, args.e );
+				if ( args.f !== undefined ) line.f = absolute( state.f, args.f );
 
 				//Layer change detection is or made by watching Z, it's made by watching when we extrude at a new Z position
-				if ( delta( state.e, line.e ) > 0 ) {
+				if ( line.e > state.e ) {
 
-					line.extruding = delta( state.e, line.e ) > 0;
+					state.extruding = true;
 
 					if ( currentLayer == undefined || line.z != currentLayer.z ) {
 
@@ -160,20 +210,37 @@ GCodeLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 				//G90: Set to Absolute Positioning
 				state.relative = false;
 
+				// reset M82/M83 extrusion override
+				state.extrusionOverride = false;
+
 			} else if ( cmd === 'G91' ) {
 
 				//G91: Set to state.relative Positioning
 				state.relative = true;
 
+				// reset M82/M83 extrusion override
+				state.extrusionOverride = false;
+
+			} else if ( cmd === 'M82' ) {
+
+				//M82: Override G91 and put the E axis into absolute mode independent of the other axes
+				state.extrusionOverride = true;
+				state.extrusionRelative = false;
+
+			} else if ( cmd === 'M83' ) {
+
+				//M83: Overrides G90 and put the E axis into relative mode independent of the other axes
+				state.extrusionOverride = true;
+				state.extrusionRelative = true;
+
 			} else if ( cmd === 'G92' ) {
 
 				//G92: Set Position
-				var line = state;
+				const line = state;
 				line.x = args.x !== undefined ? args.x : line.x;
 				line.y = args.y !== undefined ? args.y : line.y;
 				line.z = args.z !== undefined ? args.z : line.z;
 				line.e = args.e !== undefined ? args.e : line.e;
-				state = line;
 
 			} else {
 
@@ -183,54 +250,65 @@ GCodeLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		}
 
-		function addObject( vertex, extruding ) {
+		function addObject( vertex, extruding, i ) {
 
-			var geometry = new BufferGeometry();
+			const geometry = new BufferGeometry();
 			geometry.setAttribute( 'position', new Float32BufferAttribute( vertex, 3 ) );
-
-			var segments = new LineSegments( geometry, extruding ? extrudingMaterial : pathMaterial );
+			const segments = new LineSegments( geometry, extruding ? extrudingMaterial : pathMaterial );
 			segments.name = 'layer' + i;
 			object.add( segments );
 
 		}
 
-		var object = new Group();
+		const object = new Group();
 		object.name = 'gcode';
 
 		if ( this.splitLayer ) {
 
-			for ( var i = 0; i < layers.length; i ++ ) {
+			for ( let i = 0; i < layers.length; i ++ ) {
 
-				var layer = layers[ i ];
-				addObject( layer.vertex, true );
-				addObject( layer.pathVertex, false );
+				const layer = layers[ i ];
+				addObject( layer.vertex, true, i );
+				addObject( layer.pathVertex, false, i );
 
 			}
 
 		} else {
 
-			var vertex = [], pathVertex = [];
+			const vertex = [],
+				pathVertex = [];
 
-			for ( var i = 0; i < layers.length; i ++ ) {
+			for ( let i = 0; i < layers.length; i ++ ) {
 
-				var layer = layers[ i ];
+				const layer = layers[ i ];
+				const layerVertex = layer.vertex;
+				const layerPathVertex = layer.pathVertex;
 
-				vertex = vertex.concat( layer.vertex );
-				pathVertex = pathVertex.concat( layer.pathVertex );
+				for ( let j = 0; j < layerVertex.length; j ++ ) {
+
+					vertex.push( layerVertex[ j ] );
+
+				}
+
+				for ( let j = 0; j < layerPathVertex.length; j ++ ) {
+
+					pathVertex.push( layerPathVertex[ j ] );
+
+				}
 
 			}
 
-			addObject( vertex, true );
-			addObject( pathVertex, false );
+			addObject( vertex, true, layers.length );
+			addObject( pathVertex, false, layers.length );
 
 		}
 
-		object.quaternion.setFromEuler( new Euler( - Math.PI / 2, 0, 0 ) );
+		object.rotation.set( - Math.PI / 2, 0, 0 );
 
 		return object;
 
 	}
 
-} );
+}
 
 export { GCodeLoader };

@@ -1,37 +1,53 @@
 import { Vector3 } from './Vector3.js';
 
 /**
- * @author bhouston / http://clara.io
- * @author WestLangley / http://github.com/WestLangley
+ * Represents a third-order spherical harmonics (SH). Light probes use this class
+ * to encode lighting information.
  *
- * Primary reference:
- *   https://graphics.stanford.edu/papers/envmap/envmap.pdf
- *
- * Secondary reference:
- *   https://www.ppsloan.org/publications/StupidSH36.pdf
+ * - Primary reference: {@link https://graphics.stanford.edu/papers/envmap/envmap.pdf}
+ * - Secondary reference: {@link https://www.ppsloan.org/publications/StupidSH36.pdf}
  */
+class SphericalHarmonics3 {
 
-// 3-band SH defined by 9 coefficients
+	/**
+	 * Constructs a new spherical harmonics.
+	 */
+	constructor() {
 
-function SphericalHarmonics3() {
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
+		this.isSphericalHarmonics3 = true;
 
-	this.coefficients = [];
+		/**
+		 * An array holding the (9) SH coefficients.
+		 *
+		 * @type {Array<Vector3>}
+		 */
+		this.coefficients = [];
 
-	for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
-		this.coefficients.push( new Vector3() );
+			this.coefficients.push( new Vector3() );
+
+		}
 
 	}
 
-}
+	/**
+	 * Sets the given SH coefficients to this instance by copying
+	 * the values.
+	 *
+	 * @param {Array<Vector3>} coefficients - The SH coefficients.
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	set( coefficients ) {
 
-Object.assign( SphericalHarmonics3.prototype, {
-
-	isSphericalHarmonics3: true,
-
-	set: function ( coefficients ) {
-
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			this.coefficients[ i ].copy( coefficients[ i ] );
 
@@ -39,11 +55,16 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return this;
 
-	},
+	}
 
-	zero: function () {
+	/**
+	 * Sets all SH coefficients to `0`.
+	 *
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	zero() {
 
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			this.coefficients[ i ].set( 0, 0, 0 );
 
@@ -51,70 +72,86 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return this;
 
-	},
+	}
 
-	// get the radiance in the direction of the normal
-	// target is a Vector3
-	getAt: function ( normal, target ) {
+	/**
+	 * Returns the radiance in the direction of the given normal.
+	 *
+	 * @param {Vector3} normal - The normal vector (assumed to be unit length)
+	 * @param {Vector3} target - The target vector that is used to store the method's result.
+	 * @return {Vector3} The radiance.
+	 */
+	getAt( normal, target ) {
 
 		// normal is assumed to be unit length
 
-		var x = normal.x, y = normal.y, z = normal.z;
+		const x = normal.x, y = normal.y, z = normal.z;
 
-		var coeff = this.coefficients;
+		const coeff = this.coefficients;
 
 		// band 0
 		target.copy( coeff[ 0 ] ).multiplyScalar( 0.282095 );
 
 		// band 1
-		target.addScale( coeff[ 1 ], 0.488603 * y );
-		target.addScale( coeff[ 2 ], 0.488603 * z );
-		target.addScale( coeff[ 3 ], 0.488603 * x );
+		target.addScaledVector( coeff[ 1 ], 0.488603 * y );
+		target.addScaledVector( coeff[ 2 ], 0.488603 * z );
+		target.addScaledVector( coeff[ 3 ], 0.488603 * x );
 
 		// band 2
-		target.addScale( coeff[ 4 ], 1.092548 * ( x * y ) );
-		target.addScale( coeff[ 5 ], 1.092548 * ( y * z ) );
-		target.addScale( coeff[ 6 ], 0.315392 * ( 3.0 * z * z - 1.0 ) );
-		target.addScale( coeff[ 7 ], 1.092548 * ( x * z ) );
-		target.addScale( coeff[ 8 ], 0.546274 * ( x * x - y * y ) );
+		target.addScaledVector( coeff[ 4 ], 1.092548 * ( x * y ) );
+		target.addScaledVector( coeff[ 5 ], 1.092548 * ( y * z ) );
+		target.addScaledVector( coeff[ 6 ], 0.315392 * ( 3.0 * z * z - 1.0 ) );
+		target.addScaledVector( coeff[ 7 ], 1.092548 * ( x * z ) );
+		target.addScaledVector( coeff[ 8 ], 0.546274 * ( x * x - y * y ) );
 
 		return target;
 
-	},
+	}
 
-	// get the irradiance (radiance convolved with cosine lobe) in the direction of the normal
-	// target is a Vector3
-	// https://graphics.stanford.edu/papers/envmap/envmap.pdf
-	getIrradianceAt: function ( normal, target ) {
+	/**
+	 * Returns the irradiance (radiance convolved with cosine lobe) in the
+	 * direction of the given normal.
+	 *
+	 * @param {Vector3} normal - The normal vector (assumed to be unit length)
+	 * @param {Vector3} target - The target vector that is used to store the method's result.
+	 * @return {Vector3} The irradiance.
+	 */
+	getIrradianceAt( normal, target ) {
 
 		// normal is assumed to be unit length
 
-		var x = normal.x, y = normal.y, z = normal.z;
+		const x = normal.x, y = normal.y, z = normal.z;
 
-		var coeff = this.coefficients;
+		const coeff = this.coefficients;
 
 		// band 0
 		target.copy( coeff[ 0 ] ).multiplyScalar( 0.886227 ); // π * 0.282095
 
 		// band 1
-		target.addScale( coeff[ 1 ], 2.0 * 0.511664 * y ); // ( 2 * π / 3 ) * 0.488603
-		target.addScale( coeff[ 2 ], 2.0 * 0.511664 * z );
-		target.addScale( coeff[ 3 ], 2.0 * 0.511664 * x );
+		target.addScaledVector( coeff[ 1 ], 2.0 * 0.511664 * y ); // ( 2 * π / 3 ) * 0.488603
+		target.addScaledVector( coeff[ 2 ], 2.0 * 0.511664 * z );
+		target.addScaledVector( coeff[ 3 ], 2.0 * 0.511664 * x );
 
 		// band 2
-		target.addScale( coeff[ 4 ], 2.0 * 0.429043 * x * y ); // ( π / 4 ) * 1.092548
-		target.addScale( coeff[ 5 ], 2.0 * 0.429043 * y * z );
-		target.addScale( coeff[ 6 ], 0.743125 * z * z - 0.247708 ); // ( π / 4 ) * 0.315392 * 3
-		target.addScale( coeff[ 7 ], 2.0 * 0.429043 * x * z );
-		target.addScale( coeff[ 8 ], 0.429043 * ( x * x - y * y ) ); // ( π / 4 ) * 0.546274
+		target.addScaledVector( coeff[ 4 ], 2.0 * 0.429043 * x * y ); // ( π / 4 ) * 1.092548
+		target.addScaledVector( coeff[ 5 ], 2.0 * 0.429043 * y * z );
+		target.addScaledVector( coeff[ 6 ], 0.743125 * z * z - 0.247708 ); // ( π / 4 ) * 0.315392 * 3
+		target.addScaledVector( coeff[ 7 ], 2.0 * 0.429043 * x * z );
+		target.addScaledVector( coeff[ 8 ], 0.429043 * ( x * x - y * y ) ); // ( π / 4 ) * 0.546274
 
 		return target;
 
-	},
+	}
 
-	add: function ( sh ) {
+	/**
+	 * Adds the given SH to this instance.
+	 *
+	 * @param {SphericalHarmonics3} sh - The SH to add.
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	add( sh ) {
 
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			this.coefficients[ i ].add( sh.coefficients[ i ] );
 
@@ -122,12 +159,37 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return this;
 
-	},
+	}
 
+	/**
+	 * A convenience method for performing {@link SphericalHarmonics3#add} and
+	 * {@link SphericalHarmonics3#scale} at once.
+	 *
+	 * @param {SphericalHarmonics3} sh - The SH to add.
+	 * @param {number} s - The scale factor.
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	addScaledSH( sh, s ) {
 
-	scale: function ( s ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
-		for ( var i = 0; i < 9; i ++ ) {
+			this.coefficients[ i ].addScaledVector( sh.coefficients[ i ], s );
+
+		}
+
+		return this;
+
+	}
+
+	/**
+	 * Scales this SH by the given scale factor.
+	 *
+	 * @param {number} s - The scale factor.
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	scale( s ) {
+
+		for ( let i = 0; i < 9; i ++ ) {
 
 			this.coefficients[ i ].multiplyScalar( s );
 
@@ -135,11 +197,19 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return this;
 
-	},
+	}
 
-	lerp: function ( sh, alpha ) {
+	/**
+	 * Linear interpolates between the given SH and this instance by the given
+	 * alpha factor.
+	 *
+	 * @param {SphericalHarmonics3} sh - The SH to interpolate with.
+	 * @param {number} alpha - The alpha factor.
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	lerp( sh, alpha ) {
 
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			this.coefficients[ i ].lerp( sh.coefficients[ i ], alpha );
 
@@ -147,11 +217,17 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return this;
 
-	},
+	}
 
-	equals: function ( sh ) {
+	/**
+	 * Returns `true` if this spherical harmonics is equal with the given one.
+	 *
+	 * @param {SphericalHarmonics3} sh - The spherical harmonics to test for equality.
+	 * @return {boolean} Whether this spherical harmonics is equal with the given one.
+	 */
+	equals( sh ) {
 
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			if ( ! this.coefficients[ i ].equals( sh.coefficients[ i ] ) ) {
 
@@ -163,27 +239,43 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return true;
 
-	},
+	}
 
-	copy: function ( sh ) {
+	/**
+	 * Copies the values of the given spherical harmonics to this instance.
+	 *
+	 * @param {SphericalHarmonics3} sh - The spherical harmonics to copy.
+	 * @return {SphericalHarmonics3} A reference to this spherical harmonics.
+	 */
+	copy( sh ) {
 
 		return this.set( sh.coefficients );
 
-	},
+	}
 
-	clone: function () {
+	/**
+	 * Returns a new spherical harmonics with copied values from this instance.
+	 *
+	 * @return {SphericalHarmonics3} A clone of this instance.
+	 */
+	clone() {
 
 		return new this.constructor().copy( this );
 
-	},
+	}
 
-	fromArray: function ( array, offset ) {
+	/**
+	 * Sets the SH coefficients of this instance from the given array.
+	 *
+	 * @param {Array<number>} array - An array holding the SH coefficients.
+	 * @param {number} [offset=0] - The array offset where to start copying.
+	 * @return {SphericalHarmonics3} A clone of this instance.
+	 */
+	fromArray( array, offset = 0 ) {
 
-		if ( offset === undefined ) offset = 0;
+		const coefficients = this.coefficients;
 
-		var coefficients = this.coefficients;
-
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			coefficients[ i ].fromArray( array, offset + ( i * 3 ) );
 
@@ -191,16 +283,21 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 		return this;
 
-	},
+	}
 
-	toArray: function ( array, offset ) {
+	/**
+	 * Returns an array with the SH coefficients, or copies them into the provided
+	 * array. The coefficients are represented as numbers.
+	 *
+	 * @param {Array<number>} [array=[]] - The target array.
+	 * @param {number} [offset=0] - The array offset where to start copying.
+	 * @return {Array<number>} An array with flat SH coefficients.
+	 */
+	toArray( array = [], offset = 0 ) {
 
-		if ( array === undefined ) array = [];
-		if ( offset === undefined ) offset = 0;
+		const coefficients = this.coefficients;
 
-		var coefficients = this.coefficients;
-
-		for ( var i = 0; i < 9; i ++ ) {
+		for ( let i = 0; i < 9; i ++ ) {
 
 			coefficients[ i ].toArray( array, offset + ( i * 3 ) );
 
@@ -210,17 +307,17 @@ Object.assign( SphericalHarmonics3.prototype, {
 
 	}
 
-} );
-
-Object.assign( SphericalHarmonics3, {
-
-	// evaluate the basis functions
-	// shBasis is an Array[ 9 ]
-	getBasisAt: function ( normal, shBasis ) {
+	/**
+	 * Computes the SH basis for the given normal vector.
+	 *
+	 * @param {Vector3} normal - The normal.
+	 * @param {Array<number>} shBasis - The target array holding the SH basis.
+	 */
+	static getBasisAt( normal, shBasis ) {
 
 		// normal is assumed to be unit length
 
-		var x = normal.x, y = normal.y, z = normal.z;
+		const x = normal.x, y = normal.y, z = normal.z;
 
 		// band 0
 		shBasis[ 0 ] = 0.282095;
@@ -239,6 +336,6 @@ Object.assign( SphericalHarmonics3, {
 
 	}
 
-} );
+}
 
 export { SphericalHarmonics3 };

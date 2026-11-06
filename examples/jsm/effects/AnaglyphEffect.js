@@ -1,181 +1,274 @@
-/**
- * @author mrdoob / http://mrdoob.com/
- * @author marklundin / http://mark-lundin.com/
- * @author alteredq / http://alteredqualia.com/
- * @author tschw
- */
-
 import {
 	LinearFilter,
+	MathUtils,
 	Matrix3,
-	Mesh,
 	NearestFilter,
-	OrthographicCamera,
-	PlaneBufferGeometry,
+	PerspectiveCamera,
 	RGBAFormat,
-	Scene,
 	ShaderMaterial,
-	StereoCamera,
+	Vector3,
 	WebGLRenderTarget
-} from "../../../build/three.module.js";
+} from 'three';
+import { FullScreenQuad } from '../postprocessing/Pass.js';
+import { frameCorners } from '../utils/CameraUtils.js';
 
-var AnaglyphEffect = function ( renderer, width, height ) {
+const _cameraL = /*@__PURE__*/ new PerspectiveCamera();
+const _cameraR = /*@__PURE__*/ new PerspectiveCamera();
 
-	// Matrices generated with angler.js https://github.com/tschw/angler.js/
-	// (in column-major element order, as accepted by WebGL)
+// Reusable vectors for screen corner calculations
+const _eyeL = /*@__PURE__*/ new Vector3();
+const _eyeR = /*@__PURE__*/ new Vector3();
+const _screenCenter = /*@__PURE__*/ new Vector3();
+const _screenBottomLeft = /*@__PURE__*/ new Vector3();
+const _screenBottomRight = /*@__PURE__*/ new Vector3();
+const _screenTopLeft = /*@__PURE__*/ new Vector3();
+const _right = /*@__PURE__*/ new Vector3();
+const _up = /*@__PURE__*/ new Vector3();
+const _forward = /*@__PURE__*/ new Vector3();
 
-	this.colorMatrixLeft = new Matrix3().fromArray( [
+/**
+ * A class that creates an anaglyph effect using physically-correct
+ * off-axis stereo projection.
+ *
+ * This implementation uses CameraUtils.frameCorners() to align stereo
+ * camera frustums to a virtual screen plane, providing accurate depth
+ * perception with zero parallax at the plane distance.
+ *
+ * Note that this class can only be used with {@link WebGLRenderer}.
+ * When using {@link WebGPURenderer}, use {@link AnaglyphPassNode}.
+ *
+ * @three_import import { AnaglyphEffect } from 'three/addons/effects/AnaglyphEffect.js';
+ */
+class AnaglyphEffect {
 
-		1.0671679973602295, - 0.0016435992438346148, 0.0001777536963345483, // r out
-		- 0.028107794001698494, - 0.00019593400065787137, - 0.0002875397040043026, // g out
-		- 0.04279090091586113, 0.000015809757314855233, - 0.00024287120322696865 // b out
+	/**
+	 * Constructs a new anaglyph effect.
+	 *
+	 * @param {WebGLRenderer} renderer - The renderer.
+	 * @param {number} width - The width of the effect in physical pixels.
+	 * @param {number} height - The height of the effect in physical pixels.
+	 */
+	constructor( renderer, width = 512, height = 512 ) {
 
-	] );
+		// Dubois matrices from https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.7.6968&rep=rep1&type=pdf#page=4
 
-	//		red						green 						blue  						in
+		this.colorMatrixLeft = new Matrix3().fromArray( [
+			0.456100, - 0.0400822, - 0.0152161,
+			0.500484, - 0.0378246, - 0.0205971,
+			0.176381, - 0.0157589, - 0.00546856
+		] );
 
-	this.colorMatrixRight = new Matrix3().fromArray( [
+		this.colorMatrixRight = new Matrix3().fromArray( [
+			- 0.0434706, 0.378476, - 0.0721527,
+			- 0.0879388, 0.73364, - 0.112961,
+			- 0.00155529, - 0.0184503, 1.2264
+		] );
 
-		- 0.0355340838432312, - 0.06440307199954987, 0.018319187685847282, // r out
-		- 0.10269022732973099, 0.8079727292060852, - 0.04835830628871918, // g out
-		0.0001224992738571018, - 0.009558862075209618, 0.567823588848114 // b out
+		/**
+		 * The interpupillary distance (eye separation) in world units.
+		 * Typical human IPD is 0.064 meters (64mm).
+		 *
+		 * @type {number}
+		 * @default 0.064
+		 */
+		this.eyeSep = 0.064;
 
-	] );
+		/**
+		 * The distance in world units from the viewer to the virtual
+		 * screen plane where zero parallax (screen depth) occurs.
+		 * Objects at this distance appear at the screen surface.
+		 * Objects closer appear in front of the screen (negative parallax).
+		 * Objects further appear behind the screen (positive parallax).
+		 *
+		 * The screen dimensions are derived from the camera's FOV and aspect ratio
+		 * at this distance, ensuring the stereo view matches the camera's field of view.
+		 *
+		 * @type {number}
+		 * @default 0.5
+		 */
+		this.planeDistance = 0.5;
 
-	var _camera = new OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+		const _params = { minFilter: LinearFilter, magFilter: NearestFilter, format: RGBAFormat };
 
-	var _scene = new Scene();
+		const _renderTargetL = new WebGLRenderTarget( width, height, _params );
+		const _renderTargetR = new WebGLRenderTarget( width, height, _params );
 
-	var _stereo = new StereoCamera();
+		_cameraL.layers.enable( 1 );
+		_cameraR.layers.enable( 2 );
 
-	var _params = { minFilter: LinearFilter, magFilter: NearestFilter, format: RGBAFormat };
+		const _material = new ShaderMaterial( {
 
-	if ( width === undefined ) width = 512;
-	if ( height === undefined ) height = 512;
+			uniforms: {
 
-	var _renderTargetL = new WebGLRenderTarget( width, height, _params );
-	var _renderTargetR = new WebGLRenderTarget( width, height, _params );
+				'mapLeft': { value: _renderTargetL.texture },
+				'mapRight': { value: _renderTargetR.texture },
 
-	var _material = new ShaderMaterial( {
+				'colorMatrixLeft': { value: this.colorMatrixLeft },
+				'colorMatrixRight': { value: this.colorMatrixRight }
 
-		uniforms: {
+			},
 
-			"mapLeft": { value: _renderTargetL.texture },
-			"mapRight": { value: _renderTargetR.texture },
+			vertexShader: [
 
-			"colorMatrixLeft": { value: this.colorMatrixLeft },
-			"colorMatrixRight": { value: this.colorMatrixRight }
+				'varying vec2 vUv;',
 
-		},
+				'void main() {',
 
-		vertexShader: [
+				'	vUv = vec2( uv.x, uv.y );',
+				'	gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );',
 
-			"varying vec2 vUv;",
+				'}'
 
-			"void main() {",
+			].join( '\n' ),
 
-			"	vUv = vec2( uv.x, uv.y );",
-			"	gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );",
+			fragmentShader: [
 
-			"}"
+				'uniform sampler2D mapLeft;',
+				'uniform sampler2D mapRight;',
+				'varying vec2 vUv;',
 
-		].join( "\n" ),
+				'uniform mat3 colorMatrixLeft;',
+				'uniform mat3 colorMatrixRight;',
 
-		fragmentShader: [
+				'void main() {',
 
-			"uniform sampler2D mapLeft;",
-			"uniform sampler2D mapRight;",
-			"varying vec2 vUv;",
+				'	vec2 uv = vUv;',
 
-			"uniform mat3 colorMatrixLeft;",
-			"uniform mat3 colorMatrixRight;",
+				'	vec4 colorL = texture2D( mapLeft, uv );',
+				'	vec4 colorR = texture2D( mapRight, uv );',
 
-			// These functions implement sRGB linearization and gamma correction
+				'	vec3 color = clamp(',
+				'			colorMatrixLeft * colorL.rgb +',
+				'			colorMatrixRight * colorR.rgb, 0., 1. );',
 
-			"float lin( float c ) {",
-			"	return c <= 0.04045 ? c * 0.0773993808 :",
-			"			pow( c * 0.9478672986 + 0.0521327014, 2.4 );",
-			"}",
+				'	gl_FragColor = vec4(',
+				'			color.r, color.g, color.b,',
+				'			max( colorL.a, colorR.a ) );',
 
-			"vec4 lin( vec4 c ) {",
-			"	return vec4( lin( c.r ), lin( c.g ), lin( c.b ), c.a );",
-			"}",
+				'	#include <tonemapping_fragment>',
+				'	#include <colorspace_fragment>',
 
-			"float dev( float c ) {",
-			"	return c <= 0.0031308 ? c * 12.92",
-			"			: pow( c, 0.41666 ) * 1.055 - 0.055;",
-			"}",
+				'}'
 
+			].join( '\n' )
 
-			"void main() {",
+		} );
 
-			"	vec2 uv = vUv;",
+		const _quad = new FullScreenQuad( _material );
 
-			"	vec4 colorL = lin( texture2D( mapLeft, uv ) );",
-			"	vec4 colorR = lin( texture2D( mapRight, uv ) );",
+		/**
+		 * Resizes the effect.
+		 *
+		 * @param {number} width - The width of the effect in logical pixels.
+		 * @param {number} height - The height of the effect in logical pixels.
+		 */
+		this.setSize = function ( width, height ) {
 
-			"	vec3 color = clamp(",
-			"			colorMatrixLeft * colorL.rgb +",
-			"			colorMatrixRight * colorR.rgb, 0., 1. );",
+			renderer.setSize( width, height );
 
-			"	gl_FragColor = vec4(",
-			"			dev( color.r ), dev( color.g ), dev( color.b ),",
-			"			max( colorL.a, colorR.a ) );",
+			const pixelRatio = renderer.getPixelRatio();
 
-			"}"
+			_renderTargetL.setSize( width * pixelRatio, height * pixelRatio );
+			_renderTargetR.setSize( width * pixelRatio, height * pixelRatio );
 
-		].join( "\n" )
+		};
 
-	} );
+		/**
+		 * When using this effect, this method should be called instead of the
+		 * default {@link WebGLRenderer#render}.
+		 *
+		 * @param {Object3D} scene - The scene to render.
+		 * @param {Camera} camera - The camera.
+		 */
+		this.render = function ( scene, camera ) {
 
-	var _mesh = new Mesh( new PlaneBufferGeometry( 2, 2 ), _material );
-	_scene.add( _mesh );
+			const currentRenderTarget = renderer.getRenderTarget();
 
-	this.setSize = function ( width, height ) {
+			if ( scene.matrixWorldAutoUpdate === true ) scene.updateMatrixWorld();
 
-		renderer.setSize( width, height );
+			if ( camera.parent === null && camera.matrixWorldAutoUpdate === true ) camera.updateMatrixWorld();
 
-		var pixelRatio = renderer.getPixelRatio();
+			// Get the camera's local coordinate axes from its world matrix
+			camera.matrixWorld.extractBasis( _right, _up, _forward );
+			_right.normalize();
+			_up.normalize();
+			_forward.normalize();
 
-		_renderTargetL.setSize( width * pixelRatio, height * pixelRatio );
-		_renderTargetR.setSize( width * pixelRatio, height * pixelRatio );
+			// Calculate eye positions
+			const halfSep = this.eyeSep / 2;
+			_eyeL.copy( camera.position ).addScaledVector( _right, - halfSep );
+			_eyeR.copy( camera.position ).addScaledVector( _right, halfSep );
 
-	};
+			// Calculate screen center (at planeDistance in front of the camera center)
+			_screenCenter.copy( camera.position ).addScaledVector( _forward, - this.planeDistance );
 
-	this.render = function ( scene, camera ) {
+			// Calculate screen dimensions from camera FOV and aspect ratio
+			const halfHeight = this.planeDistance * Math.tan( MathUtils.DEG2RAD * camera.fov / 2 );
+			const halfWidth = halfHeight * camera.aspect;
 
-		var currentRenderTarget = renderer.getRenderTarget();
+			// Calculate screen corners
+			_screenBottomLeft.copy( _screenCenter )
+				.addScaledVector( _right, - halfWidth )
+				.addScaledVector( _up, - halfHeight );
 
-		scene.updateMatrixWorld();
+			_screenBottomRight.copy( _screenCenter )
+				.addScaledVector( _right, halfWidth )
+				.addScaledVector( _up, - halfHeight );
 
-		if ( camera.parent === null ) camera.updateMatrixWorld();
+			_screenTopLeft.copy( _screenCenter )
+				.addScaledVector( _right, - halfWidth )
+				.addScaledVector( _up, halfHeight );
 
-		_stereo.update( camera );
+			// Set up left eye camera
+			_cameraL.position.copy( _eyeL );
+			_cameraL.near = camera.near;
+			_cameraL.far = camera.far;
+			frameCorners( _cameraL, _screenBottomLeft, _screenBottomRight, _screenTopLeft, true );
+			_cameraL.matrixWorld.compose( _cameraL.position, _cameraL.quaternion, _cameraL.scale );
+			_cameraL.matrixWorldInverse.copy( _cameraL.matrixWorld ).invert();
 
-		renderer.setRenderTarget( _renderTargetL );
-		renderer.clear();
-		renderer.render( scene, _stereo.cameraL );
+			// Set up right eye camera
+			_cameraR.position.copy( _eyeR );
+			_cameraR.near = camera.near;
+			_cameraR.far = camera.far;
+			frameCorners( _cameraR, _screenBottomLeft, _screenBottomRight, _screenTopLeft, true );
+			_cameraR.matrixWorld.compose( _cameraR.position, _cameraR.quaternion, _cameraR.scale );
+			_cameraR.matrixWorldInverse.copy( _cameraR.matrixWorld ).invert();
 
-		renderer.setRenderTarget( _renderTargetR );
-		renderer.clear();
-		renderer.render( scene, _stereo.cameraR );
+			// Render left eye
+			renderer.setRenderTarget( _renderTargetL );
+			renderer.clear();
+			renderer.render( scene, _cameraL );
 
-		renderer.setRenderTarget( null );
-		renderer.render( _scene, _camera );
+			// Render right eye
+			renderer.setRenderTarget( _renderTargetR );
+			renderer.clear();
+			renderer.render( scene, _cameraR );
 
-		renderer.setRenderTarget( currentRenderTarget );
+			// Composite anaglyph
+			renderer.setRenderTarget( null );
+			_quad.render( renderer );
 
-	};
+			renderer.setRenderTarget( currentRenderTarget );
 
-	this.dispose = function () {
+		};
 
-		if ( _renderTargetL ) _renderTargetL.dispose();
-		if ( _renderTargetR ) _renderTargetR.dispose();
-		if ( _mesh ) _mesh.geometry.dispose();
-		if ( _material ) _material.dispose();
+		/**
+		 * Frees internal resources. This method should be called
+		 * when the effect is no longer required.
+		 */
+		this.dispose = function () {
 
-	};
+			_renderTargetL.dispose();
+			_renderTargetR.dispose();
 
-};
+			_material.dispose();
+			_quad.dispose();
+
+		};
+
+	}
+
+}
 
 export { AnaglyphEffect };

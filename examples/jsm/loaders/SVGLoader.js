@@ -1,59 +1,177 @@
-/**
- * @author mrdoob / http://mrdoob.com/
- * @author zz85 / http://joshuakoo.com/
- * @author yomboprime / https://yombo.org
- */
-
 import {
+	Box2,
 	BufferGeometry,
+	CanvasTexture,
+	ClampToEdgeWrapping,
 	Color,
+	DoubleSide,
 	FileLoader,
 	Float32BufferAttribute,
 	Loader,
 	Matrix3,
+	MeshBasicMaterial,
+	MirroredRepeatWrapping,
 	Path,
+	RepeatWrapping,
 	ShapePath,
+	ShapeUtils,
+	SRGBColorSpace,
 	Vector2,
 	Vector3
-} from "../../../build/three.module.js";
+} from 'three';
 
-var SVGLoader = function ( manager ) {
+const COLOR_SPACE_SVG = SRGBColorSpace;
 
-	Loader.call( this, manager );
+/**
+ * A loader for the SVG format.
+ *
+ * Scalable Vector Graphics is an XML-based vector image format for two-dimensional graphics
+ * with support for interactivity and animation.
+ *
+ * ```js
+ * const loader = new SVGLoader();
+ * const data = await loader.loadAsync( 'data/svgSample.svg' );
+ *
+ * const paths = data.paths;
+ * const group = new THREE.Group();
+ *
+ * for ( let i = 0; i < paths.length; i ++ ) {
+ *
+ * 	const path = paths[ i ];
+ * 	const material = new THREE.MeshBasicMaterial( {
+ * 		color: path.color,
+ * 		side: THREE.DoubleSide,
+ * 		depthWrite: false
+ * 	} );
+ *
+ * 	const shapes = SVGLoader.createShapes( path );
+ *
+ * 	for ( let j = 0; j < shapes.length; j ++ ) {
+ *
+ * 		const shape = shapes[ j ];
+ * 		const geometry = new THREE.ShapeGeometry( shape );
+ * 		const mesh = new THREE.Mesh( geometry, material );
+ * 		group.add( mesh );
+ *
+ * 	}
+ *
+ * }
+ *
+ * scene.add( group );
+ * ```
+ *
+ * @augments Loader
+ * @three_import import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
+ */
+class SVGLoader extends Loader {
 
-};
+	/**
+	 * Constructs a new SVG loader.
+	 *
+	 * @param {LoadingManager} [manager] - The loading manager.
+	 */
+	constructor( manager ) {
 
-SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
+		super( manager );
 
-	constructor: SVGLoader,
+		/**
+		 * Default dots per inch.
+		 *
+		 * @type {number}
+		 * @default 90
+		 */
+		this.defaultDPI = 90;
 
-	load: function ( url, onLoad, onProgress, onError ) {
+		/**
+		 * Default unit.
+		 *
+		 * @type {('mm'|'cm'|'in'|'pt'|'pc'|'px')}
+		 * @default 'px'
+		 */
+		this.defaultUnit = 'px';
 
-		var scope = this;
+	}
 
-		var loader = new FileLoader( scope.manager );
+	/**
+	 * Starts loading from the given URL and passes the loaded SVG asset
+	 * to the `onLoad()` callback.
+	 *
+	 * @param {string} url - The path/URL of the file to be loaded. This can also be a data URI.
+	 * @param {function({paths:Array<ShapePath>,xml:string})} onLoad - Executed when the loading process has been finished.
+	 * @param {onProgressCallback} onProgress - Executed while the loading is in progress.
+	 * @param {onErrorCallback} onError - Executed when errors occur.
+	 */
+	load( url, onLoad, onProgress, onError ) {
+
+		const scope = this;
+
+		const loader = new FileLoader( scope.manager );
+		loader.setPriority( scope.priority );
+		loader.setCache( scope.cache );
 		loader.setPath( scope.path );
+		loader.setRequestHeader( scope.requestHeader );
+		loader.setWithCredentials( scope.withCredentials );
 		loader.load( url, function ( text ) {
 
-			onLoad( scope.parse( text ) );
+			try {
+
+				onLoad( scope.parse( text ) );
+
+			} catch ( e ) {
+
+				if ( onError ) {
+
+					onError( e );
+
+				} else {
+
+					console.error( e );
+
+				}
+
+				scope.manager.itemError( url );
+
+			}
 
 		}, onProgress, onError );
 
-	},
+	}
 
-	parse: function ( text ) {
+	/**
+	 * Parses the given SVG data and returns the resulting data.
+	 *
+	 * @param {string} text - The raw SVG data as a string.
+	 * @return {{paths:Array<ShapePath>,xml:string}} An object holding an array of shape paths and the
+	 * SVG XML document.
+	 */
+	parse( text ) {
+
+		const scope = this;
 
 		function parseNode( node, style ) {
 
 			if ( node.nodeType !== 1 ) return;
 
-			var transform = getNodeTransform( node );
+			if ( node.hasAttribute( 'filter' ) ) {
 
-			var path = null;
+				console.warn( 'THREE.SVGLoader: Filters are not supported.' );
+
+			}
+
+			const transform = getNodeTransform( node );
+
+			let isDefsNode = false;
+
+			let path = null;
 
 			switch ( node.nodeName ) {
 
 				case 'svg':
+					style = parseStyle( node, style );
+					break;
+
+				case 'style':
+					parseCSSStylesheet( node );
 					break;
 
 				case 'g':
@@ -95,16 +213,38 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 					path = parseLineNode( node );
 					break;
 
+				case 'defs':
+					isDefsNode = true;
+					break;
+
+				case 'use':
+					style = parseStyle( node, style );
+
+					const href = node.getAttributeNS( 'http://www.w3.org/1999/xlink', 'href' ) || node.getAttribute( 'href' ) || '';
+					const usedNodeId = href.substring( 1 );
+					const usedNode = node.viewportElement.getElementById( usedNodeId );
+					if ( usedNode ) {
+
+						parseNode( usedNode, style );
+
+					} else {
+
+						console.warn( 'SVGLoader: \'use node\' references non-existent node id: ' + usedNodeId );
+
+					}
+
+					break;
+
 				default:
-					console.log( node );
+					// console.log( node );
 
 			}
 
 			if ( path ) {
 
-				if ( style.fill !== undefined && style.fill !== 'none' ) {
+				if ( style.fill !== undefined && style.fill !== 'none' && ! style.fill.startsWith( 'url' ) ) {
 
-					path.color.setStyle( style.fill );
+					path.color.setStyle( style.fill, COLOR_SPACE_SVG );
 
 				}
 
@@ -112,17 +252,32 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 				paths.push( path );
 
-				path.userData = { node: node, style: style };
+				const pathStyle = Object.assign( {}, style );
+				pathStyle.strokeWidth = style.strokeWidth * getTransformScale( currentTransform );
+
+				path.userData = { node: node, style: pathStyle, transform: currentTransform.clone(), gradients: gradients };
 
 			}
 
-			var nodes = node.childNodes;
+			const childNodes = node.childNodes;
 
-			for ( var i = 0; i < nodes.length; i ++ ) {
+			for ( let i = 0; i < childNodes.length; i ++ ) {
 
-				parseNode( nodes[ i ], style );
+				const node = childNodes[ i ];
+
+				if ( isDefsNode && node.nodeName !== 'style' && node.nodeName !== 'defs' ) {
+
+					// Ignore everything in defs except CSS style definitions
+					// and nested defs, because it is OK by the standard to have
+					// <style/> there.
+					continue;
+
+				}
+
+				parseNode( node, style );
 
 			}
+
 
 			if ( transform ) {
 
@@ -144,40 +299,50 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function parsePathNode( node ) {
 
-			var path = new ShapePath();
+			const path = new ShapePath();
 
-			var point = new Vector2();
-			var control = new Vector2();
+			const point = new Vector2();
+			const control = new Vector2();
 
-			var firstPoint = new Vector2();
-			var isFirstPoint = true;
-			var doSetFirstPoint = false;
+			const firstPoint = new Vector2();
+			let isPathClosed = false;
 
-			var d = node.getAttribute( 'd' );
+			const d = node.getAttribute( 'd' );
+
+			if ( d === '' || d === 'none' ) return null;
 
 			// console.log( d );
 
-			var commands = d.match( /[a-df-z][^a-df-z]*/ig );
+			const commands = d.match( /[a-df-z][^a-df-z]*/ig );
 
-			for ( var i = 0, l = commands.length; i < l; i ++ ) {
+			for ( let i = 0, l = commands.length; i < l; i ++ ) {
 
-				var command = commands[ i ];
+				const command = commands[ i ];
 
-				var type = command.charAt( 0 );
-				var data = command.substr( 1 ).trim();
+				const type = command.charAt( 0 );
+				const data = command.slice( 1 ).trim();
 
-				if ( isFirstPoint === true ) {
+				if ( isPathClosed === true ) {
 
-					doSetFirstPoint = true;
-					isFirstPoint = false;
+					// commands after Z without M start a new subpath at the initial point
+
+					if ( type !== 'M' && type !== 'm' && type !== 'Z' && type !== 'z' ) {
+
+						path.moveTo( firstPoint.x, firstPoint.y );
+
+					}
+
+					isPathClosed = false;
 
 				}
+
+				let numbers;
 
 				switch ( type ) {
 
 					case 'M':
-						var numbers = parseFloats( data );
-						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+						numbers = parseFloats( data );
+						for ( let j = 0, jl = numbers.length; j < jl; j += 2 ) {
 
 							point.x = numbers[ j + 0 ];
 							point.y = numbers[ j + 1 ];
@@ -194,45 +359,44 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 							}
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+							if ( j === 0 ) firstPoint.copy( point );
 
 						}
+
 						break;
 
 					case 'H':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j ++ ) {
 
 							point.x = numbers[ j ];
 							control.x = point.x;
 							control.y = point.y;
 							path.lineTo( point.x, point.y );
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'V':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j ++ ) {
 
 							point.y = numbers[ j ];
 							control.x = point.x;
 							control.y = point.y;
 							path.lineTo( point.x, point.y );
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'L':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 2 ) {
 
 							point.x = numbers[ j + 0 ];
 							point.y = numbers[ j + 1 ];
@@ -240,15 +404,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							control.y = point.y;
 							path.lineTo( point.x, point.y );
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'C':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 6 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 6 ) {
 
 							path.bezierCurveTo(
 								numbers[ j + 0 ],
@@ -263,15 +426,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x = numbers[ j + 4 ];
 							point.y = numbers[ j + 5 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'S':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 4 ) {
 
 							path.bezierCurveTo(
 								getReflection( point.x, control.x ),
@@ -286,15 +448,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x = numbers[ j + 2 ];
 							point.y = numbers[ j + 3 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'Q':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 4 ) {
 
 							path.quadraticCurveTo(
 								numbers[ j + 0 ],
@@ -307,18 +468,17 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x = numbers[ j + 2 ];
 							point.y = numbers[ j + 3 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'T':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 2 ) {
 
-							var rx = getReflection( point.x, control.x );
-							var ry = getReflection( point.y, control.y );
+							const rx = getReflection( point.x, control.x );
+							const ry = getReflection( point.y, control.y );
 							path.quadraticCurveTo(
 								rx,
 								ry,
@@ -330,17 +490,19 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x = numbers[ j + 0 ];
 							point.y = numbers[ j + 1 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'A':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data, [ 3, 4 ], 7 );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 7 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 7 ) {
 
-							var start = point.clone();
+							// skip command if start point == end point
+							if ( numbers[ j + 5 ] == point.x && numbers[ j + 6 ] == point.y ) continue;
+
+							const start = point.clone();
 							point.x = numbers[ j + 5 ];
 							point.y = numbers[ j + 6 ];
 							control.x = point.x;
@@ -349,15 +511,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 								path, numbers[ j ], numbers[ j + 1 ], numbers[ j + 2 ], numbers[ j + 3 ], numbers[ j + 4 ], start, point
 							);
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'm':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 2 ) {
 
 							point.x += numbers[ j + 0 ];
 							point.y += numbers[ j + 1 ];
@@ -374,45 +535,44 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 							}
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
+							if ( j === 0 ) firstPoint.copy( point );
 
 						}
+
 						break;
 
 					case 'h':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j ++ ) {
 
 							point.x += numbers[ j ];
 							control.x = point.x;
 							control.y = point.y;
 							path.lineTo( point.x, point.y );
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'v':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j ++ ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j ++ ) {
 
 							point.y += numbers[ j ];
 							control.x = point.x;
 							control.y = point.y;
 							path.lineTo( point.x, point.y );
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'l':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 2 ) {
 
 							point.x += numbers[ j + 0 ];
 							point.y += numbers[ j + 1 ];
@@ -420,15 +580,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							control.y = point.y;
 							path.lineTo( point.x, point.y );
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'c':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 6 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 6 ) {
 
 							path.bezierCurveTo(
 								point.x + numbers[ j + 0 ],
@@ -443,15 +602,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x += numbers[ j + 4 ];
 							point.y += numbers[ j + 5 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 's':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 4 ) {
 
 							path.bezierCurveTo(
 								getReflection( point.x, control.x ),
@@ -466,15 +624,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x += numbers[ j + 2 ];
 							point.y += numbers[ j + 3 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'q':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 4 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 4 ) {
 
 							path.quadraticCurveTo(
 								point.x + numbers[ j + 0 ],
@@ -487,18 +644,17 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x += numbers[ j + 2 ];
 							point.y += numbers[ j + 3 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 't':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 2 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 2 ) {
 
-							var rx = getReflection( point.x, control.x );
-							var ry = getReflection( point.y, control.y );
+							const rx = getReflection( point.x, control.x );
+							const ry = getReflection( point.y, control.y );
 							path.quadraticCurveTo(
 								rx,
 								ry,
@@ -510,17 +666,19 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							point.x = point.x + numbers[ j + 0 ];
 							point.y = point.y + numbers[ j + 1 ];
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'a':
-						var numbers = parseFloats( data );
+						numbers = parseFloats( data, [ 3, 4 ], 7 );
 
-						for ( var j = 0, jl = numbers.length; j < jl; j += 7 ) {
+						for ( let j = 0, jl = numbers.length; j < jl; j += 7 ) {
 
-							var start = point.clone();
+							// skip command if no displacement
+							if ( numbers[ j + 5 ] == 0 && numbers[ j + 6 ] == 0 ) continue;
+
+							const start = point.clone();
 							point.x += numbers[ j + 5 ];
 							point.y += numbers[ j + 6 ];
 							control.x = point.x;
@@ -529,9 +687,8 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 								path, numbers[ j ], numbers[ j + 1 ], numbers[ j + 2 ], numbers[ j + 3 ], numbers[ j + 4 ], start, point
 							);
 
-							if ( j === 0 && doSetFirstPoint === true ) firstPoint.copy( point );
-
 						}
+
 						break;
 
 					case 'Z':
@@ -543,9 +700,10 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 							// Reset point to beginning of Path
 							point.copy( firstPoint );
 							path.currentPath.currentPoint.copy( point );
-							isFirstPoint = true;
+							isPathClosed = true;
 
 						}
+
 						break;
 
 					default:
@@ -555,11 +713,46 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 				// console.log( type, parseFloats( data ), parseFloats( data ).length  )
 
-				doSetFirstPoint = false;
-
 			}
 
 			return path;
+
+		}
+
+		function parseCSSStylesheet( node ) {
+
+			if ( ! node.sheet || ! node.sheet.cssRules || ! node.sheet.cssRules.length ) return;
+
+			for ( let i = 0; i < node.sheet.cssRules.length; i ++ ) {
+
+				const stylesheet = node.sheet.cssRules[ i ];
+
+				if ( stylesheet.type !== 1 ) continue;
+
+				const selectorList = stylesheet.selectorText
+					.split( /,/gm )
+					.filter( Boolean )
+					.map( i => i.trim() );
+
+				const definitions = {};
+
+				for ( let j = 0; j < stylesheet.style.length; j ++ ) {
+
+					const property = stylesheet.style[ j ];
+					definitions[ property ] = stylesheet.style.getPropertyValue( property );
+
+				}
+
+				for ( let j = 0; j < selectorList.length; j ++ ) {
+
+					stylesheets[ selectorList[ j ] ] = Object.assign(
+						stylesheets[ selectorList[ j ] ] || {},
+						definitions
+					);
+
+				}
+
+			}
 
 		}
 
@@ -574,31 +767,39 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function parseArcCommand( path, rx, ry, x_axis_rotation, large_arc_flag, sweep_flag, start, end ) {
 
+			if ( rx == 0 || ry == 0 ) {
+
+				// draw a line if either of the radii == 0
+				path.lineTo( end.x, end.y );
+				return;
+
+			}
+
 			x_axis_rotation = x_axis_rotation * Math.PI / 180;
 
 			// Ensure radii are positive
 			rx = Math.abs( rx );
 			ry = Math.abs( ry );
 
-			// Compute (x1′, y1′)
-			var dx2 = ( start.x - end.x ) / 2.0;
-			var dy2 = ( start.y - end.y ) / 2.0;
-			var x1p = Math.cos( x_axis_rotation ) * dx2 + Math.sin( x_axis_rotation ) * dy2;
-			var y1p = - Math.sin( x_axis_rotation ) * dx2 + Math.cos( x_axis_rotation ) * dy2;
+			// Compute (x1', y1')
+			const dx2 = ( start.x - end.x ) / 2.0;
+			const dy2 = ( start.y - end.y ) / 2.0;
+			const x1p = Math.cos( x_axis_rotation ) * dx2 + Math.sin( x_axis_rotation ) * dy2;
+			const y1p = - Math.sin( x_axis_rotation ) * dx2 + Math.cos( x_axis_rotation ) * dy2;
 
-			// Compute (cx′, cy′)
-			var rxs = rx * rx;
-			var rys = ry * ry;
-			var x1ps = x1p * x1p;
-			var y1ps = y1p * y1p;
+			// Compute (cx', cy')
+			let rxs = rx * rx;
+			let rys = ry * ry;
+			const x1ps = x1p * x1p;
+			const y1ps = y1p * y1p;
 
 			// Ensure radii are large enough
-			var cr = x1ps / rxs + y1ps / rys;
+			const cr = x1ps / rxs + y1ps / rys;
 
 			if ( cr > 1 ) {
 
 				// scale up rx,ry equally so cr == 1
-				var s = Math.sqrt( cr );
+				const s = Math.sqrt( cr );
 				rx = s * rx;
 				ry = s * ry;
 				rxs = rx * rx;
@@ -606,20 +807,20 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			}
 
-			var dq = ( rxs * y1ps + rys * x1ps );
-			var pq = ( rxs * rys - dq ) / dq;
-			var q = Math.sqrt( Math.max( 0, pq ) );
+			const dq = ( rxs * y1ps + rys * x1ps );
+			const pq = ( rxs * rys - dq ) / dq;
+			let q = Math.sqrt( Math.max( 0, pq ) );
 			if ( large_arc_flag === sweep_flag ) q = - q;
-			var cxp = q * rx * y1p / ry;
-			var cyp = - q * ry * x1p / rx;
+			const cxp = q * rx * y1p / ry;
+			const cyp = - q * ry * x1p / rx;
 
-			// Step 3: Compute (cx, cy) from (cx′, cy′)
-			var cx = Math.cos( x_axis_rotation ) * cxp - Math.sin( x_axis_rotation ) * cyp + ( start.x + end.x ) / 2;
-			var cy = Math.sin( x_axis_rotation ) * cxp + Math.cos( x_axis_rotation ) * cyp + ( start.y + end.y ) / 2;
+			// Step 3: Compute (cx, cy) from (cx', cy')
+			const cx = Math.cos( x_axis_rotation ) * cxp - Math.sin( x_axis_rotation ) * cyp + ( start.x + end.x ) / 2;
+			const cy = Math.sin( x_axis_rotation ) * cxp + Math.cos( x_axis_rotation ) * cyp + ( start.y + end.y ) / 2;
 
 			// Step 4: Compute θ1 and Δθ
-			var theta = svgAngle( 1, 0, ( x1p - cxp ) / rx, ( y1p - cyp ) / ry );
-			var delta = svgAngle( ( x1p - cxp ) / rx, ( y1p - cyp ) / ry, ( - x1p - cxp ) / rx, ( - y1p - cyp ) / ry ) % ( Math.PI * 2 );
+			const theta = svgAngle( 1, 0, ( x1p - cxp ) / rx, ( y1p - cyp ) / ry );
+			const delta = svgAngle( ( x1p - cxp ) / rx, ( y1p - cyp ) / ry, ( - x1p - cxp ) / rx, ( - y1p - cyp ) / ry ) % ( Math.PI * 2 );
 
 			path.currentPath.absellipse( cx, cy, rx, ry, theta, theta + delta, sweep_flag === 0, x_axis_rotation );
 
@@ -627,9 +828,9 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function svgAngle( ux, uy, vx, vy ) {
 
-			var dot = ux * vx + uy * vy;
-			var len = Math.sqrt( ux * ux + uy * uy ) * Math.sqrt( vx * vx + vy * vy );
-			var ang = Math.acos( Math.max( - 1, Math.min( 1, dot / len ) ) ); // floating point precision, slightly over values appear
+			const dot = ux * vx + uy * vy;
+			const len = Math.sqrt( ux * ux + uy * uy ) * Math.sqrt( vx * vx + vy * vy );
+			let ang = Math.acos( Math.max( - 1, Math.min( 1, dot / len ) ) ); // floating point precision, slightly over values appear
 			if ( ( ux * vy - uy * vx ) < 0 ) ang = - ang;
 			return ang;
 
@@ -639,34 +840,75 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 		* According to https://www.w3.org/TR/SVG/shapes.html#RectElementRXAttribute
 		* rounded corner should be rendered to elliptical arc, but bezier curve does the job well enough
 		*/
+
 		function parseRectNode( node ) {
 
-			var x = parseFloat( node.getAttribute( 'x' ) || 0 );
-			var y = parseFloat( node.getAttribute( 'y' ) || 0 );
-			var rx = parseFloat( node.getAttribute( 'rx' ) || 0 );
-			var ry = parseFloat( node.getAttribute( 'ry' ) || 0 );
-			var w = parseFloat( node.getAttribute( 'width' ) );
-			var h = parseFloat( node.getAttribute( 'height' ) );
+			const x = parseFloatWithUnits( node.getAttribute( 'x' ) || 0 );
+			const y = parseFloatWithUnits( node.getAttribute( 'y' ) || 0 );
+			const rx = parseFloatWithUnits( node.getAttribute( 'rx' ) || node.getAttribute( 'ry' ) || 0 );
+			const ry = parseFloatWithUnits( node.getAttribute( 'ry' ) || node.getAttribute( 'rx' ) || 0 );
+			const w = parseFloatWithUnits( node.getAttribute( 'width' ) );
+			const h = parseFloatWithUnits( node.getAttribute( 'height' ) );
 
-			var path = new ShapePath();
-			path.moveTo( x + 2 * rx, y );
-			path.lineTo( x + w - 2 * rx, y );
-			if ( rx !== 0 || ry !== 0 ) path.bezierCurveTo( x + w, y, x + w, y, x + w, y + 2 * ry );
-			path.lineTo( x + w, y + h - 2 * ry );
-			if ( rx !== 0 || ry !== 0 ) path.bezierCurveTo( x + w, y + h, x + w, y + h, x + w - 2 * rx, y + h );
-			path.lineTo( x + 2 * rx, y + h );
+			// Ellipse arc to Bezier approximation Coefficient (Inversed). See:
+			// https://spencermortensen.com/articles/bezier-circle/
+			const bci = 1 - 0.551915024494;
 
+			const path = new ShapePath();
+
+			// top left
+			path.moveTo( x + rx, y );
+
+			// top right
+			path.lineTo( x + w - rx, y );
 			if ( rx !== 0 || ry !== 0 ) {
 
-				path.bezierCurveTo( x, y + h, x, y + h, x, y + h - 2 * ry );
+				path.bezierCurveTo(
+					x + w - rx * bci,
+					y,
+					x + w,
+					y + ry * bci,
+					x + w,
+					y + ry
+				);
 
 			}
 
-			path.lineTo( x, y + 2 * ry );
-
+			// bottom right
+			path.lineTo( x + w, y + h - ry );
 			if ( rx !== 0 || ry !== 0 ) {
 
-				path.bezierCurveTo( x, y, x, y, x + 2 * rx, y );
+				path.bezierCurveTo(
+					x + w,
+					y + h - ry * bci,
+					x + w - rx * bci,
+					y + h,
+					x + w - rx,
+					y + h
+				);
+
+			}
+
+			// bottom left
+			path.lineTo( x + rx, y + h );
+			if ( rx !== 0 || ry !== 0 ) {
+
+				path.bezierCurveTo(
+					x + rx * bci,
+					y + h,
+					x,
+					y + h - ry * bci,
+					x,
+					y + h - ry
+				);
+
+			}
+
+			// back to top left
+			path.lineTo( x, y + ry );
+			if ( rx !== 0 || ry !== 0 ) {
+
+				path.bezierCurveTo( x, y + ry * bci, x + rx * bci, y, x + rx, y );
 
 			}
 
@@ -678,8 +920,8 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			function iterator( match, a, b ) {
 
-				var x = parseFloat( a );
-				var y = parseFloat( b );
+				const x = parseFloatWithUnits( a );
+				const y = parseFloatWithUnits( b );
 
 				if ( index === 0 ) {
 
@@ -695,11 +937,11 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			}
 
-			var regex = /(-?[\d\.?]+)[,|\s](-?[\d\.?]+)/g;
+			const regex = /([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)(?:,|\s)([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)/g;
 
-			var path = new ShapePath();
+			const path = new ShapePath();
 
-			var index = 0;
+			let index = 0;
 
 			node.getAttribute( 'points' ).replace( regex, iterator );
 
@@ -713,8 +955,8 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			function iterator( match, a, b ) {
 
-				var x = parseFloat( a );
-				var y = parseFloat( b );
+				const x = parseFloatWithUnits( a );
+				const y = parseFloatWithUnits( b );
 
 				if ( index === 0 ) {
 
@@ -730,11 +972,11 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			}
 
-			var regex = /(-?[\d\.?]+)[,|\s](-?[\d\.?]+)/g;
+			const regex = /([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)(?:,|\s)([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)/g;
 
-			var path = new ShapePath();
+			const path = new ShapePath();
 
-			var index = 0;
+			let index = 0;
 
 			node.getAttribute( 'points' ).replace( regex, iterator );
 
@@ -746,14 +988,14 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function parseCircleNode( node ) {
 
-			var x = parseFloat( node.getAttribute( 'cx' ) );
-			var y = parseFloat( node.getAttribute( 'cy' ) );
-			var r = parseFloat( node.getAttribute( 'r' ) );
+			const x = parseFloatWithUnits( node.getAttribute( 'cx' ) || 0 );
+			const y = parseFloatWithUnits( node.getAttribute( 'cy' ) || 0 );
+			const r = parseFloatWithUnits( node.getAttribute( 'r' ) || 0 );
 
-			var subpath = new Path();
+			const subpath = new Path();
 			subpath.absarc( x, y, r, 0, Math.PI * 2 );
 
-			var path = new ShapePath();
+			const path = new ShapePath();
 			path.subPaths.push( subpath );
 
 			return path;
@@ -762,15 +1004,15 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function parseEllipseNode( node ) {
 
-			var x = parseFloat( node.getAttribute( 'cx' ) );
-			var y = parseFloat( node.getAttribute( 'cy' ) );
-			var rx = parseFloat( node.getAttribute( 'rx' ) );
-			var ry = parseFloat( node.getAttribute( 'ry' ) );
+			const x = parseFloatWithUnits( node.getAttribute( 'cx' ) || 0 );
+			const y = parseFloatWithUnits( node.getAttribute( 'cy' ) || 0 );
+			const rx = parseFloatWithUnits( node.getAttribute( 'rx' ) || 0 );
+			const ry = parseFloatWithUnits( node.getAttribute( 'ry' ) || 0 );
 
-			var subpath = new Path();
+			const subpath = new Path();
 			subpath.absellipse( x, y, rx, ry, 0, Math.PI * 2 );
 
-			var path = new ShapePath();
+			const path = new ShapePath();
 			path.subPaths.push( subpath );
 
 			return path;
@@ -779,12 +1021,12 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function parseLineNode( node ) {
 
-			var x1 = parseFloat( node.getAttribute( 'x1' ) );
-			var y1 = parseFloat( node.getAttribute( 'y1' ) );
-			var x2 = parseFloat( node.getAttribute( 'x2' ) );
-			var y2 = parseFloat( node.getAttribute( 'y2' ) );
+			const x1 = parseFloatWithUnits( node.getAttribute( 'x1' ) || 0 );
+			const y1 = parseFloatWithUnits( node.getAttribute( 'y1' ) || 0 );
+			const x2 = parseFloatWithUnits( node.getAttribute( 'x2' ) || 0 );
+			const y2 = parseFloatWithUnits( node.getAttribute( 'y2' ) || 0 );
 
-			var path = new ShapePath();
+			const path = new ShapePath();
 			path.moveTo( x1, y1 );
 			path.lineTo( x2, y2 );
 			path.currentPath.autoClose = false;
@@ -795,9 +1037,172 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		//
 
+		function parseGradients( xml ) {
+
+			const HREF_NS = 'http://www.w3.org/1999/xlink';
+			const gradientNodes = xml.querySelectorAll( 'linearGradient, radialGradient' );
+			const ATTRS = [ 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'fx', 'fy', 'gradientUnits', 'gradientTransform', 'spreadMethod' ];
+
+			const parsed = {};
+
+			for ( const node of gradientNodes ) {
+
+				const id = node.getAttribute( 'id' );
+				if ( ! id ) continue;
+
+				const entry = {
+					type: node.nodeName === 'radialGradient' ? 'radialGradient' : 'linearGradient',
+					attrs: {},
+					stops: null,
+					href: null,
+				};
+
+				const href = node.getAttributeNS( HREF_NS, 'href' ) || node.getAttribute( 'href' ) || '';
+				if ( href.startsWith( '#' ) ) entry.href = href.substring( 1 );
+
+				for ( const name of ATTRS ) {
+
+					if ( node.hasAttribute( name ) ) entry.attrs[ name ] = node.getAttribute( name );
+
+				}
+
+				const stopNodes = node.querySelectorAll( 'stop' );
+				if ( stopNodes.length > 0 ) {
+
+					entry.stops = [];
+					for ( const s of stopNodes ) {
+
+						let color = s.getAttribute( 'stop-color' );
+						if ( ! color && s.style ) color = s.style[ 'stop-color' ];
+						if ( ! color ) color = '#000';
+
+						let opacity = s.getAttribute( 'stop-opacity' );
+						if ( ( opacity === null || opacity === '' ) && s.style ) opacity = s.style[ 'stop-opacity' ];
+						opacity = ( opacity === null || opacity === '' || opacity === undefined )
+							? 1
+							: Math.max( 0, Math.min( 1, parseFloat( opacity ) ) );
+
+						const offset = Math.max( 0, Math.min( 1, parseFloat( s.getAttribute( 'offset' ) || '0' ) ) );
+						entry.stops.push( { offset, color, opacity } );
+
+					}
+
+				}
+
+				parsed[ id ] = entry;
+
+			}
+
+			function inherit( id, visited ) {
+
+				const entry = parsed[ id ];
+				if ( ! entry || visited.has( id ) ) return entry;
+				visited.add( id );
+
+				if ( entry.href && parsed[ entry.href ] ) {
+
+					const parent = inherit( entry.href, visited );
+					if ( parent ) {
+
+						if ( ! entry.stops ) entry.stops = parent.stops;
+						for ( const key in parent.attrs ) {
+
+							if ( ! ( key in entry.attrs ) ) entry.attrs[ key ] = parent.attrs[ key ];
+
+						}
+
+					}
+
+				}
+
+				return entry;
+
+			}
+
+			for ( const id in parsed ) inherit( id, new Set() );
+
+			for ( const id in parsed ) {
+
+				const entry = parsed[ id ];
+				const a = entry.attrs;
+				const units = a.gradientUnits === 'userSpaceOnUse' ? 'userSpaceOnUse' : 'objectBoundingBox';
+
+				const gradient = {
+					type: entry.type,
+					gradientUnits: units,
+					spreadMethod: a.spreadMethod === 'reflect' || a.spreadMethod === 'repeat' ? a.spreadMethod : 'pad',
+					gradientTransform: null,
+					stops: ( entry.stops || [] ).slice().sort( ( x, y ) => x.offset - y.offset ),
+				};
+
+				if ( a.gradientTransform ) {
+
+					gradient.gradientTransform = new Matrix3();
+					parseTransformString( a.gradientTransform, gradient.gradientTransform );
+
+				}
+
+				function coord( str ) {
+
+					if ( typeof str !== 'string' ) return 0;
+					if ( str.endsWith( '%' ) ) return parseFloat( str ) / 100;
+					return parseFloatWithUnits( str );
+
+				}
+
+				if ( entry.type === 'linearGradient' ) {
+
+					gradient.x1 = a.x1 !== undefined ? coord( a.x1 ) : 0;
+					gradient.y1 = a.y1 !== undefined ? coord( a.y1 ) : 0;
+					gradient.x2 = a.x2 !== undefined ? coord( a.x2 ) : ( units === 'objectBoundingBox' ? 1 : 0 );
+					gradient.y2 = a.y2 !== undefined ? coord( a.y2 ) : 0;
+
+				} else {
+
+					const defCenter = units === 'objectBoundingBox' ? 0.5 : 0;
+					const defR = units === 'objectBoundingBox' ? 0.5 : 0;
+					gradient.cx = a.cx !== undefined ? coord( a.cx ) : defCenter;
+					gradient.cy = a.cy !== undefined ? coord( a.cy ) : defCenter;
+					gradient.r = a.r !== undefined ? coord( a.r ) : defR;
+					gradient.fx = a.fx !== undefined ? coord( a.fx ) : gradient.cx;
+					gradient.fy = a.fy !== undefined ? coord( a.fy ) : gradient.cy;
+
+				}
+
+				gradients[ id ] = gradient;
+
+			}
+
+		}
+
+		//
+
 		function parseStyle( node, style ) {
 
 			style = Object.assign( {}, style ); // clone style
+
+			let stylesheetStyles = {};
+
+			if ( node.hasAttribute( 'class' ) ) {
+
+				const classSelectors = node.getAttribute( 'class' )
+					.split( /\s/ )
+					.filter( Boolean )
+					.map( i => i.trim() );
+
+				for ( let i = 0; i < classSelectors.length; i ++ ) {
+
+					stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '.' + classSelectors[ i ] ] );
+
+				}
+
+			}
+
+			if ( node.hasAttribute( 'id' ) ) {
+
+				stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
+
+			}
 
 			function addStyle( svgName, jsName, adjustFunction ) {
 
@@ -808,30 +1213,34 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 				};
 
 				if ( node.hasAttribute( svgName ) ) style[ jsName ] = adjustFunction( node.getAttribute( svgName ) );
-				if ( node.style[ svgName ] !== '' ) style[ jsName ] = adjustFunction( node.style[ svgName ] );
+				if ( stylesheetStyles[ svgName ] ) style[ jsName ] = adjustFunction( stylesheetStyles[ svgName ] );
+				if ( node.style && node.style[ svgName ] !== '' ) style[ jsName ] = adjustFunction( node.style[ svgName ] );
 
 			}
 
 			function clamp( v ) {
 
-				return Math.max( 0, Math.min( 1, parseFloat( v ) ) );
+				return Math.max( 0, Math.min( 1, parseFloatWithUnits( v ) ) );
 
 			}
 
 			function positive( v ) {
 
-				return Math.max( 0, parseFloat( v ) );
+				return Math.max( 0, parseFloatWithUnits( v ) );
 
 			}
 
 			addStyle( 'fill', 'fill' );
 			addStyle( 'fill-opacity', 'fillOpacity', clamp );
+			addStyle( 'fill-rule', 'fillRule' );
+			addStyle( 'opacity', 'opacity', clamp );
 			addStyle( 'stroke', 'stroke' );
 			addStyle( 'stroke-opacity', 'strokeOpacity', clamp );
 			addStyle( 'stroke-width', 'strokeWidth', positive );
 			addStyle( 'stroke-linejoin', 'strokeLineJoin' );
 			addStyle( 'stroke-linecap', 'strokeLineCap' );
 			addStyle( 'stroke-miterlimit', 'strokeMiterLimit', positive );
+			addStyle( 'visibility', 'visibility' );
 
 			return style;
 
@@ -845,47 +1254,364 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		}
 
-		function parseFloats( string ) {
+		// from https://github.com/ppvg/svg-numbers (MIT License)
 
-			var array = string.split( /[\s,]+|(?=\s?[+\-])/ );
+		function parseFloats( input, flags, stride ) {
 
-			for ( var i = 0; i < array.length; i ++ ) {
+			if ( typeof input !== 'string' ) {
 
-				var number = array[ i ];
+				throw new TypeError( 'Invalid input: ' + typeof input );
 
-				// Handle values like 48.6037.7.8
-				// TODO Find a regex for this
+			}
 
-				if ( number.indexOf( '.' ) !== number.lastIndexOf( '.' ) ) {
+			// Character groups
+			const RE = {
+				SEPARATOR: /[ \t\r\n\,.\-+]/,
+				WHITESPACE: /[ \t\r\n]/,
+				DIGIT: /[\d]/,
+				SIGN: /[-+]/,
+				POINT: /\./,
+				COMMA: /,/,
+				EXP: /e/i,
+				FLAGS: /[01]/
+			};
 
-					var split = number.split( '.' );
+			// States
+			const SEP = 0;
+			const INT = 1;
+			const FLOAT = 2;
+			const EXP = 3;
 
-					for ( var s = 2; s < split.length; s ++ ) {
+			let state = SEP;
+			let seenComma = true;
+			let number = '', exponent = '';
+			const result = [];
 
-						array.splice( i + s - 1, 0, '0.' + split[ s ] );
+			function throwSyntaxError( current, i, partial ) {
+
+				const error = new SyntaxError( 'Unexpected character "' + current + '" at index ' + i + '.' );
+				error.partial = partial;
+				throw error;
+
+			}
+
+			function newNumber() {
+
+				if ( number !== '' ) {
+
+					if ( exponent === '' ) result.push( Number( number ) );
+					else result.push( Number( number ) * Math.pow( 10, Number( exponent ) ) );
+
+				}
+
+				number = '';
+				exponent = '';
+
+			}
+
+			let current;
+			const length = input.length;
+
+			for ( let i = 0; i < length; i ++ ) {
+
+				current = input[ i ];
+
+				// check for flags
+				if ( Array.isArray( flags ) && flags.includes( result.length % stride ) && RE.FLAGS.test( current ) ) {
+
+					state = INT;
+					number = current;
+					newNumber();
+					continue;
+
+				}
+
+				// parse until next number
+				if ( state === SEP ) {
+
+					// eat whitespace
+					if ( RE.WHITESPACE.test( current ) ) {
+
+						continue;
+
+					}
+
+					// start new number
+					if ( RE.DIGIT.test( current ) || RE.SIGN.test( current ) ) {
+
+						state = INT;
+						number = current;
+						continue;
+
+					}
+
+					if ( RE.POINT.test( current ) ) {
+
+						state = FLOAT;
+						number = current;
+						continue;
+
+					}
+
+					// throw on double commas (e.g. "1, , 2")
+					if ( RE.COMMA.test( current ) ) {
+
+						if ( seenComma ) {
+
+							throwSyntaxError( current, i, result );
+
+						}
+
+						seenComma = true;
 
 					}
 
 				}
 
-				array[ i ] = parseFloat( number );
+				// parse integer part
+				if ( state === INT ) {
+
+					if ( RE.DIGIT.test( current ) ) {
+
+						number += current;
+						continue;
+
+					}
+
+					if ( RE.POINT.test( current ) ) {
+
+						number += current;
+						state = FLOAT;
+						continue;
+
+					}
+
+					if ( RE.EXP.test( current ) ) {
+
+						state = EXP;
+						continue;
+
+					}
+
+					// throw on double signs ("-+1"), but not on sign as separator ("-1-2")
+					if ( RE.SIGN.test( current )
+							&& number.length === 1
+							&& RE.SIGN.test( number[ 0 ] ) ) {
+
+						throwSyntaxError( current, i, result );
+
+					}
+
+				}
+
+				// parse decimal part
+				if ( state === FLOAT ) {
+
+					if ( RE.DIGIT.test( current ) ) {
+
+						number += current;
+						continue;
+
+					}
+
+					if ( RE.EXP.test( current ) ) {
+
+						state = EXP;
+						continue;
+
+					}
+
+					// throw on double decimal points (e.g. "1..2")
+					if ( RE.POINT.test( current ) && number[ number.length - 1 ] === '.' ) {
+
+						throwSyntaxError( current, i, result );
+
+					}
+
+				}
+
+				// parse exponent part
+				if ( state === EXP ) {
+
+					if ( RE.DIGIT.test( current ) ) {
+
+						exponent += current;
+						continue;
+
+					}
+
+					if ( RE.SIGN.test( current ) ) {
+
+						if ( exponent === '' ) {
+
+							exponent += current;
+							continue;
+
+						}
+
+						if ( exponent.length === 1 && RE.SIGN.test( exponent ) ) {
+
+							throwSyntaxError( current, i, result );
+
+						}
+
+					}
+
+				}
+
+
+				// end of number
+				if ( RE.WHITESPACE.test( current ) ) {
+
+					newNumber();
+					state = SEP;
+					seenComma = false;
+
+				} else if ( RE.COMMA.test( current ) ) {
+
+					newNumber();
+					state = SEP;
+					seenComma = true;
+
+				} else if ( RE.SIGN.test( current ) ) {
+
+					newNumber();
+					state = INT;
+					number = current;
+
+				} else if ( RE.POINT.test( current ) ) {
+
+					newNumber();
+					state = FLOAT;
+					number = current;
+
+				} else {
+
+					throwSyntaxError( current, i, result );
+
+				}
 
 			}
 
-			return array;
+			// add the last number found (if any)
+			newNumber();
 
+			return result;
 
 		}
 
+		// Units
+
+		const units = [ 'mm', 'cm', 'in', 'pt', 'pc', 'px' ];
+
+		// Conversion: [ fromUnit ][ toUnit ] (-1 means dpi dependent)
+		const unitConversion = {
+
+			'mm': {
+				'mm': 1,
+				'cm': 0.1,
+				'in': 1 / 25.4,
+				'pt': 72 / 25.4,
+				'pc': 6 / 25.4,
+				'px': - 1
+			},
+			'cm': {
+				'mm': 10,
+				'cm': 1,
+				'in': 1 / 2.54,
+				'pt': 72 / 2.54,
+				'pc': 6 / 2.54,
+				'px': - 1
+			},
+			'in': {
+				'mm': 25.4,
+				'cm': 2.54,
+				'in': 1,
+				'pt': 72,
+				'pc': 6,
+				'px': - 1
+			},
+			'pt': {
+				'mm': 25.4 / 72,
+				'cm': 2.54 / 72,
+				'in': 1 / 72,
+				'pt': 1,
+				'pc': 6 / 72,
+				'px': - 1
+			},
+			'pc': {
+				'mm': 25.4 / 6,
+				'cm': 2.54 / 6,
+				'in': 1 / 6,
+				'pt': 72 / 6,
+				'pc': 1,
+				'px': - 1
+			},
+			'px': {
+				'px': 1
+			}
+
+		};
+
+		function parseFloatWithUnits( string ) {
+
+			let theUnit = 'px';
+
+			if ( typeof string === 'string' || string instanceof String ) {
+
+				for ( let i = 0, n = units.length; i < n; i ++ ) {
+
+					const u = units[ i ];
+
+					if ( string.endsWith( u ) ) {
+
+						theUnit = u;
+						string = string.substring( 0, string.length - u.length );
+						break;
+
+					}
+
+				}
+
+			}
+
+			let scale = undefined;
+
+			if ( theUnit === 'px' && scope.defaultUnit !== 'px' ) {
+
+				// Conversion scale from  pixels to inches, then to default units
+
+				scale = unitConversion[ 'in' ][ scope.defaultUnit ] / scope.defaultDPI;
+
+			} else {
+
+				scale = unitConversion[ theUnit ][ scope.defaultUnit ];
+
+				if ( scale < 0 ) {
+
+					// Conversion scale to pixels
+
+					scale = unitConversion[ theUnit ][ 'in' ] * scope.defaultDPI;
+
+				}
+
+			}
+
+			return scale * parseFloat( string );
+
+		}
+
+		// Transforms
+
 		function getNodeTransform( node ) {
 
-			if ( ! node.hasAttribute( 'transform' ) ) {
+			if ( ! ( node.hasAttribute( 'transform' ) || ( node.nodeName === 'use' && ( node.hasAttribute( 'x' ) || node.hasAttribute( 'y' ) ) ) ) ) {
 
 				return null;
 
 			}
 
-			var transform = parseNodeTransform( node );
+			const transform = parseNodeTransform( node );
 
 			if ( transformStack.length > 0 ) {
 
@@ -902,35 +1628,58 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		function parseNodeTransform( node ) {
 
-			var transform = new Matrix3();
-			var currentTransform = tempTransform0;
-			var transformsTexts = node.getAttribute( 'transform' ).split( ')' );
+			const transform = new Matrix3();
 
-			for ( var tIndex = transformsTexts.length - 1; tIndex >= 0; tIndex -- ) {
+			if ( node.nodeName === 'use' && ( node.hasAttribute( 'x' ) || node.hasAttribute( 'y' ) ) ) {
 
-				var transformText = transformsTexts[ tIndex ].trim();
+				const tx = parseFloatWithUnits( node.getAttribute( 'x' ) || 0 );
+				const ty = parseFloatWithUnits( node.getAttribute( 'y' ) || 0 );
+
+				transform.makeTranslation( tx, ty );
+
+			}
+
+			if ( node.hasAttribute( 'transform' ) ) {
+
+				parseTransformString( node.getAttribute( 'transform' ), transform );
+
+			}
+
+			return transform;
+
+		}
+
+		function parseTransformString( text, transform ) {
+
+			const currentTransform = tempTransform0;
+
+			const transformsTexts = text.split( ')' );
+
+			for ( let tIndex = transformsTexts.length - 1; tIndex >= 0; tIndex -- ) {
+
+				const transformText = transformsTexts[ tIndex ].trim();
 
 				if ( transformText === '' ) continue;
 
-				var openParPos = transformText.indexOf( '(' );
-				var closeParPos = transformText.length;
+				const openParPos = transformText.indexOf( '(' );
+				const closeParPos = transformText.length;
 
 				if ( openParPos > 0 && openParPos < closeParPos ) {
 
-					var transformType = transformText.substr( 0, openParPos );
+					const transformType = transformText.slice( 0, openParPos );
 
-					var array = parseFloats( transformText.substr( openParPos + 1, closeParPos - openParPos - 1 ) );
+					const array = parseFloats( transformText.slice( openParPos + 1 ) );
 
 					currentTransform.identity();
 
 					switch ( transformType ) {
 
-						case "translate":
+						case 'translate':
 
 							if ( array.length >= 1 ) {
 
-								var tx = array[ 0 ];
-								var ty = tx;
+								const tx = array[ 0 ];
+								let ty = 0;
 
 								if ( array.length >= 2 ) {
 
@@ -938,22 +1687,22 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 								}
 
-								currentTransform.translate( tx, ty );
+								currentTransform.makeTranslation( tx, ty );
 
 							}
 
 							break;
 
-						case "rotate":
+						case 'rotate':
 
 							if ( array.length >= 1 ) {
 
-								var angle = 0;
-								var cx = 0;
-								var cy = 0;
+								let angle = 0;
+								let cx = 0;
+								let cy = 0;
 
 								// Angle
-								angle = - array[ 0 ] * Math.PI / 180;
+								angle = array[ 0 ] * Math.PI / 180;
 
 								if ( array.length >= 3 ) {
 
@@ -964,22 +1713,22 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 								}
 
 								// Rotate around center (cx, cy)
-								tempTransform1.identity().translate( - cx, - cy );
-								tempTransform2.identity().rotate( angle );
+								tempTransform1.makeTranslation( - cx, - cy );
+								tempTransform2.makeRotation( angle );
 								tempTransform3.multiplyMatrices( tempTransform2, tempTransform1 );
-								tempTransform1.identity().translate( cx, cy );
+								tempTransform1.makeTranslation( cx, cy );
 								currentTransform.multiplyMatrices( tempTransform1, tempTransform3 );
 
 							}
 
 							break;
 
-						case "scale":
+						case 'scale':
 
 							if ( array.length >= 1 ) {
 
-								var scaleX = array[ 0 ];
-								var scaleY = scaleX;
+								const scaleX = array[ 0 ];
+								let scaleY = scaleX;
 
 								if ( array.length >= 2 ) {
 
@@ -987,13 +1736,13 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 								}
 
-								currentTransform.scale( scaleX, scaleY );
+								currentTransform.makeScale( scaleX, scaleY );
 
 							}
 
 							break;
 
-						case "skewX":
+						case 'skewX':
 
 							if ( array.length === 1 ) {
 
@@ -1007,7 +1756,7 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 							break;
 
-						case "skewY":
+						case 'skewY':
 
 							if ( array.length === 1 ) {
 
@@ -1021,7 +1770,7 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 							break;
 
-						case "matrix":
+						case 'matrix':
 
 							if ( array.length === 6 ) {
 
@@ -1037,9 +1786,9 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 					}
 
-				}
+					transform.premultiply( currentTransform );
 
-				transform.premultiply( currentTransform );
+				}
 
 			}
 
@@ -1057,18 +1806,131 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			}
 
-			var isRotated = isTransformRotated( m );
+			function transfEllipseGeneric( curve ) {
 
-			var subPaths = path.subPaths;
+				// For math description see:
+				// https://math.stackexchange.com/questions/4544164
 
-			for ( var i = 0, n = subPaths.length; i < n; i ++ ) {
+				const a = curve.xRadius;
+				const b = curve.yRadius;
 
-				var subPath = subPaths[ i ];
-				var curves = subPath.curves;
+				const cosTheta = Math.cos( curve.aRotation );
+				const sinTheta = Math.sin( curve.aRotation );
 
-				for ( var j = 0; j < curves.length; j ++ ) {
+				const v1 = new Vector3( a * cosTheta, a * sinTheta, 0 );
+				const v2 = new Vector3( - b * sinTheta, b * cosTheta, 0 );
 
-					var curve = curves[ j ];
+				const f1 = v1.applyMatrix3( m );
+				const f2 = v2.applyMatrix3( m );
+
+				const mF = tempTransform0.set(
+					f1.x, f2.x, 0,
+					f1.y, f2.y, 0,
+					0, 0, 1,
+				);
+
+				const mFInv = tempTransform1.copy( mF ).invert();
+				const mFInvT = tempTransform2.copy( mFInv ).transpose();
+				const mQ = mFInvT.multiply( mFInv );
+				const mQe = mQ.elements;
+
+				const ed = eigenDecomposition( mQe[ 0 ], mQe[ 1 ], mQe[ 4 ] );
+				const rt1sqrt = Math.sqrt( ed.rt1 );
+				const rt2sqrt = Math.sqrt( ed.rt2 );
+
+				curve.xRadius = 1 / rt1sqrt;
+				curve.yRadius = 1 / rt2sqrt;
+				curve.aRotation = Math.atan2( ed.sn, ed.cs );
+
+				const isFullEllipse =
+					( curve.aEndAngle - curve.aStartAngle ) % ( 2 * Math.PI ) < Number.EPSILON;
+
+				// Do not touch angles of a full ellipse because after transformation they
+				// would converge to a single value effectively removing the whole curve
+
+				if ( ! isFullEllipse ) {
+
+					const mDsqrt = tempTransform1.set(
+						rt1sqrt, 0, 0,
+						0, rt2sqrt, 0,
+						0, 0, 1,
+					);
+
+					const mRT = tempTransform2.set(
+						ed.cs, ed.sn, 0,
+						- ed.sn, ed.cs, 0,
+						0, 0, 1,
+					);
+
+					const mDRF = mDsqrt.multiply( mRT ).multiply( mF );
+
+					const transformAngle = phi => {
+
+						const { x: cosR, y: sinR } =
+							new Vector3( Math.cos( phi ), Math.sin( phi ), 0 ).applyMatrix3( mDRF );
+
+						return Math.atan2( sinR, cosR );
+
+					};
+
+					curve.aStartAngle = transformAngle( curve.aStartAngle );
+					curve.aEndAngle = transformAngle( curve.aEndAngle );
+
+					if ( isTransformFlipped( m ) ) {
+
+						curve.aClockwise = ! curve.aClockwise;
+
+					}
+
+				}
+
+			}
+
+			function transfEllipseNoSkew( curve ) {
+
+				// Faster shortcut if no skew is applied
+				// (e.g, a euclidean transform of a group containing the ellipse)
+
+				const sx = getTransformScaleX( m );
+				const sy = getTransformScaleY( m );
+
+				curve.xRadius *= sx;
+				curve.yRadius *= sy;
+
+				// Extract rotation angle from the matrix of form:
+				//
+				//  | cosθ sx   -sinθ sy |
+				//  | sinθ sx    cosθ sy |
+				//
+				// Remembering that tanθ = sinθ / cosθ; and that
+				// `sx`, `sy`, or both might be zero.
+				const theta =
+					sx > Number.EPSILON
+						? Math.atan2( m.elements[ 1 ], m.elements[ 0 ] )
+						: Math.atan2( - m.elements[ 3 ], m.elements[ 4 ] );
+
+				curve.aRotation += theta;
+
+				if ( isTransformFlipped( m ) ) {
+
+					curve.aStartAngle *= - 1;
+					curve.aEndAngle *= - 1;
+					curve.aClockwise = ! curve.aClockwise;
+
+				}
+
+			}
+
+			const subPaths = path.subPaths;
+
+			for ( let i = 0, n = subPaths.length; i < n; i ++ ) {
+
+				const subPath = subPaths[ i ];
+				const curves = subPath.curves;
+
+				for ( let j = 0; j < curves.length; j ++ ) {
+
+					const curve = curves[ j ];
 
 					if ( curve.isLineCurve ) {
 
@@ -1090,19 +1952,24 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 					} else if ( curve.isEllipseCurve ) {
 
-						if ( isRotated ) {
-
-							console.warn( "SVGLoader: Elliptic arc or ellipse rotation or skewing is not implemented." );
-
-						}
+						// Transform ellipse center point
 
 						tempV2.set( curve.aX, curve.aY );
 						transfVec2( tempV2 );
 						curve.aX = tempV2.x;
 						curve.aY = tempV2.y;
 
-						curve.xRadius *= getTransformScaleX( m );
-						curve.yRadius *= getTransformScaleY( m );
+						// Transform ellipse shape parameters
+
+						if ( isTransformSkewed( m ) ) {
+
+							transfEllipseGeneric( curve );
+
+						} else {
+
+							transfEllipseNoSkew( curve );
+
+						}
 
 					}
 
@@ -1112,50 +1979,149 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		}
 
-		function isTransformRotated( m ) {
+		function isTransformFlipped( m ) {
 
-			return m.elements[ 1 ] !== 0 || m.elements[ 3 ] !== 0;
+			const te = m.elements;
+			return te[ 0 ] * te[ 4 ] - te[ 1 ] * te[ 3 ] < 0;
+
+		}
+
+		function isTransformSkewed( m ) {
+
+			const te = m.elements;
+			const basisDot = te[ 0 ] * te[ 3 ] + te[ 1 ] * te[ 4 ];
+
+			// Shortcut for trivial rotations and transformations
+			if ( basisDot === 0 ) return false;
+
+			const sx = getTransformScaleX( m );
+			const sy = getTransformScaleY( m );
+
+			return Math.abs( basisDot / ( sx * sy ) ) > Number.EPSILON;
 
 		}
 
 		function getTransformScaleX( m ) {
 
-			var te = m.elements;
+			const te = m.elements;
 			return Math.sqrt( te[ 0 ] * te[ 0 ] + te[ 1 ] * te[ 1 ] );
 
 		}
 
 		function getTransformScaleY( m ) {
 
-			var te = m.elements;
+			const te = m.elements;
 			return Math.sqrt( te[ 3 ] * te[ 3 ] + te[ 4 ] * te[ 4 ] );
+
+		}
+
+		function getTransformScale( m ) {
+
+			const te = m.elements;
+			const det = te[ 0 ] * te[ 4 ] - te[ 1 ] * te[ 3 ];
+			return Math.sqrt( Math.abs( det ) );
+
+		}
+
+		// Calculates the eigensystem of a real symmetric 2x2 matrix
+		//    [ A  B ]
+		//    [ B  C ]
+		// in the form
+		//    [ A  B ]  =  [ cs  -sn ] [ rt1   0  ] [  cs  sn ]
+		//    [ B  C ]     [ sn   cs ] [  0   rt2 ] [ -sn  cs ]
+		// where rt1 >= rt2.
+		//
+		// Adapted from: https://www.mpi-hd.mpg.de/personalhomes/globes/3x3/index.html
+		// -> Algorithms for real symmetric matrices -> Analytical (2x2 symmetric)
+		function eigenDecomposition( A, B, C ) {
+
+			let rt1, rt2, cs, sn, t;
+			const sm = A + C;
+			const df = A - C;
+			const rt = Math.sqrt( df * df + 4 * B * B );
+
+			if ( sm > 0 ) {
+
+				rt1 = 0.5 * ( sm + rt );
+				t = 1 / rt1;
+				rt2 = A * t * C - B * t * B;
+
+			} else if ( sm < 0 ) {
+
+				rt2 = 0.5 * ( sm - rt );
+
+			} else {
+
+				// This case needs to be treated separately to avoid div by 0
+
+				rt1 = 0.5 * rt;
+				rt2 = - 0.5 * rt;
+
+			}
+
+			// Calculate eigenvectors
+
+			if ( df > 0 ) {
+
+				cs = df + rt;
+
+			} else {
+
+				cs = df - rt;
+
+			}
+
+			if ( Math.abs( cs ) > 2 * Math.abs( B ) ) {
+
+				t = - 2 * B / cs;
+				sn = 1 / Math.sqrt( 1 + t * t );
+				cs = t * sn;
+
+			} else if ( Math.abs( B ) === 0 ) {
+
+				cs = 1;
+				sn = 0;
+
+			} else {
+
+				t = - 0.5 * cs / B;
+				cs = 1 / Math.sqrt( 1 + t * t );
+				sn = t * cs;
+
+			}
+
+			if ( df > 0 ) {
+
+				t = cs;
+				cs = - sn;
+				sn = t;
+
+			}
+
+			return { rt1, rt2, cs, sn };
 
 		}
 
 		//
 
-		console.log( 'THREE.SVGLoader' );
+		const paths = [];
+		const stylesheets = {};
+		const gradients = {};
 
-		var paths = [];
+		const transformStack = [];
 
-		var transformStack = [];
+		const tempTransform0 = new Matrix3();
+		const tempTransform1 = new Matrix3();
+		const tempTransform2 = new Matrix3();
+		const tempTransform3 = new Matrix3();
+		const tempV2 = new Vector2();
+		const tempV3 = new Vector3();
 
-		var tempTransform0 = new Matrix3();
-		var tempTransform1 = new Matrix3();
-		var tempTransform2 = new Matrix3();
-		var tempTransform3 = new Matrix3();
-		var tempV2 = new Vector2();
-		var tempV3 = new Vector3();
+		const currentTransform = new Matrix3();
 
-		var currentTransform = new Matrix3();
+		const xml = new DOMParser().parseFromString( text, 'image/svg+xml' ); // application/xml
 
-		console.time( 'THREE.SVGLoader: DOMParser' );
-
-		var xml = new DOMParser().parseFromString( text, 'image/svg+xml' ); // application/xml
-
-		console.timeEnd( 'THREE.SVGLoader: DOMParser' );
-
-		console.time( 'THREE.SVGLoader: Parse' );
+		parseGradients( xml );
 
 		parseNode( xml.documentElement, {
 			fill: '#000',
@@ -1167,94 +2133,173 @@ SVGLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 			strokeMiterLimit: 4
 		} );
 
-		var data = { paths: paths, xml: xml.documentElement };
+		const data = { paths: paths, gradients: gradients, xml: xml.documentElement };
 
 		// console.log( paths );
-
-
-		console.timeEnd( 'THREE.SVGLoader: Parse' );
-
 		return data;
 
 	}
 
-} );
+	/**
+	 * Creates a material for rendering the fill of the given path.
+	 *
+	 * @param {ShapePath} shapePath - The shape path.
+	 * @return {?MeshBasicMaterial} The fill material. `null` if the path has no fill.
+	 */
+	static createFillMaterial( shapePath ) {
 
-SVGLoader.getStrokeStyle = function ( width, color, lineJoin, lineCap, miterLimit ) {
+		const style = shapePath.userData.style;
+		if ( style.fill === undefined || style.fill === 'none' ) return null;
 
-	// Param width: Stroke width
-	// Param color: As returned by Color.getStyle()
-	// Param lineJoin: One of "round", "bevel", "miter" or "miter-limit"
-	// Param lineCap: One of "round", "square" or "butt"
-	// Param miterLimit: Maximum join length, in multiples of the "width" parameter (join is truncated if it exceeds that distance)
-	// Returns style object
+		const color = shapePath.color;
+		let texture = null;
 
-	width = width !== undefined ? width : 1;
-	color = color !== undefined ? color : '#000';
-	lineJoin = lineJoin !== undefined ? lineJoin : 'miter';
-	lineCap = lineCap !== undefined ? lineCap : 'butt';
-	miterLimit = miterLimit !== undefined ? miterLimit : 4;
+		const urlMatch = GRADIENT_URL_RE.exec( style.fill );
 
-	return {
-		strokeColor: color,
-		strokeWidth: width,
-		strokeLineJoin: lineJoin,
-		strokeLineCap: lineCap,
-		strokeMiterLimit: miterLimit
-	};
+		if ( urlMatch ) {
 
-};
+			const gradient = shapePath.userData.gradients && shapePath.userData.gradients[ urlMatch[ 1 ] ];
+			texture = buildGradientTexture( gradient, shapePath );
 
-SVGLoader.pointsToStroke = function ( points, style, arcDivisions, minDistance ) {
+		}
 
-	// Generates a stroke with some witdh around the given path.
-	// The path can be open or closed (last point equals to first point)
-	// Param points: Array of Vector2D (the path). Minimum 2 points.
-	// Param style: Object with SVG properties as returned by SVGLoader.getStrokeStyle(), or SVGLoader.parse() in the path.userData.style object
-	// Params arcDivisions: Arc divisions for round joins and endcaps. (Optional)
-	// Param minDistance: Points closer to this distance will be merged. (Optional)
-	// Returns BufferGeometry with stroke triangles (In plane z = 0). UV coordinates are generated ('u' along path. 'v' across it, from left to right)
+		const material = new MeshBasicMaterial( {
+			opacity: style.fillOpacity * ( style.opacity || 1 ),
+			transparent: true,
+			side: DoubleSide,
+			depthWrite: false,
+		} );
 
-	var vertices = [];
-	var normals = [];
-	var uvs = [];
+		if ( texture !== null ) {
 
-	if ( SVGLoader.pointsToStrokeWithBuffers( points, style, arcDivisions, minDistance, vertices, normals, uvs ) === 0 ) {
+			material.map = texture;
 
-		return null;
+		} else {
+
+			material.color = color;
+
+		}
+
+		return material;
 
 	}
 
-	var geometry = new BufferGeometry();
-	geometry.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
-	geometry.setAttribute( 'normal', new Float32BufferAttribute( normals, 3 ) );
-	geometry.setAttribute( 'uv', new Float32BufferAttribute( uvs, 2 ) );
+	/**
+	 * Creates a material for rendering the stroke of the given path.
+	 *
+	 * @param {ShapePath} shapePath - The shape path.
+	 * @return {?MeshBasicMaterial} The stroke material. `null` if the path has no stroke.
+	 */
+	static createStrokeMaterial( shapePath ) {
 
-	return geometry;
+		const style = shapePath.userData.style;
 
-};
+		if ( style.stroke === undefined || style.stroke === 'none' ) return null;
 
-SVGLoader.pointsToStrokeWithBuffers = function () {
+		if ( GRADIENT_URL_RE.test( style.stroke ) ) {
 
-	var tempV2_1 = new Vector2();
-	var tempV2_2 = new Vector2();
-	var tempV2_3 = new Vector2();
-	var tempV2_4 = new Vector2();
-	var tempV2_5 = new Vector2();
-	var tempV2_6 = new Vector2();
-	var tempV2_7 = new Vector2();
-	var lastPointL = new Vector2();
-	var lastPointR = new Vector2();
-	var point0L = new Vector2();
-	var point0R = new Vector2();
-	var currentPointL = new Vector2();
-	var currentPointR = new Vector2();
-	var nextPointL = new Vector2();
-	var nextPointR = new Vector2();
-	var innerPoint = new Vector2();
-	var outerPoint = new Vector2();
+			console.warn( 'THREE.SVGLoader: Gradient strokes are not supported.' );
 
-	return function ( points, style, arcDivisions, minDistance, vertices, normals, uvs, vertexOffset ) {
+		}
+
+		return new MeshBasicMaterial( {
+			color: new Color().setStyle( style.stroke, COLOR_SPACE_SVG ),
+			opacity: style.strokeOpacity * ( style.opacity || 1 ),
+			transparent: true,
+			side: DoubleSide,
+			depthWrite: false,
+		} );
+
+	}
+
+	/**
+	 * Creates from the given shape path and array of shapes.
+	 *
+	 * @deprecated since 185.
+	 * @param {ShapePath} shapePath - The shape path.
+	 * @return {Array<Shape>} An array of shapes.
+	 */
+	static createShapes( shapePath ) {
+
+		console.warn( 'SVGLoader: createShapes() is deprecated. Use shapePath.toShapes() instead.' ); // @deprecated, r185
+
+		return shapePath.toShapes();
+
+	}
+
+	/**
+	 * Returns a stroke style object from the given parameters.
+	 *
+	 * @param {number} [width=1] - The stroke width.
+	 * @param {string} [color='#000'] - The stroke color, as  returned by {@link Color#getStyle}.
+	 * @param {'round'|'bevel'|'miter'|'miter-limit'} [lineJoin='miter'] - The line join style.
+	 * @param {'round'|'square'|'butt'} [lineCap='butt'] - The line cap style.
+	 * @param {number} [miterLimit=4] - Maximum join length, in multiples of the `width` parameter (join is truncated if it exceeds that distance).
+	 * @return {Object} The style object.
+	 */
+	static getStrokeStyle( width, color, lineJoin, lineCap, miterLimit ) {
+
+		width = width !== undefined ? width : 1;
+		color = color !== undefined ? color : '#000';
+		lineJoin = lineJoin !== undefined ? lineJoin : 'miter';
+		lineCap = lineCap !== undefined ? lineCap : 'butt';
+		miterLimit = miterLimit !== undefined ? miterLimit : 4;
+
+		return {
+			strokeColor: color,
+			strokeWidth: width,
+			strokeLineJoin: lineJoin,
+			strokeLineCap: lineCap,
+			strokeMiterLimit: miterLimit
+		};
+
+	}
+
+	/**
+	 * Creates a stroke from an array of points.
+	 *
+	 * @param {Array<Vector2>} points - The points in 2D space. Minimum 2 points. The path can be open or closed (last point equals to first point).
+	 * @param {Object} style - Object with SVG properties as returned by `SVGLoader.getStrokeStyle()`, or `SVGLoader.parse()` in the `path.userData.style` object.
+	 * @param {number} [arcDivisions=12] - Arc divisions for round joins and endcaps.
+	 * @param {number} [minDistance=0.001] - Points closer to this distance will be merged.
+	 * @return {?BufferGeometry} The stroke geometry. UV coordinates are generated ('u' along path. 'v' across it, from left to right).
+	 * Returns `null` if not geometry was generated.
+	 */
+	static pointsToStroke( points, style, arcDivisions, minDistance ) {
+
+		const vertices = [];
+		const normals = [];
+		const uvs = [];
+
+		if ( SVGLoader.pointsToStrokeWithBuffers( points, style, arcDivisions, minDistance, vertices, normals, uvs ) === 0 ) {
+
+			return null;
+
+		}
+
+		const geometry = new BufferGeometry();
+		geometry.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
+		geometry.setAttribute( 'normal', new Float32BufferAttribute( normals, 3 ) );
+		geometry.setAttribute( 'uv', new Float32BufferAttribute( uvs, 2 ) );
+
+		return geometry;
+
+	}
+
+	/**
+	 * Creates a stroke from an array of points.
+	 *
+	 * @param {Array<Vector2>} points - The points in 2D space. Minimum 2 points.
+	 * @param {Object} style - Object with SVG properties as returned by `SVGLoader.getStrokeStyle()`, or `SVGLoader.parse()` in the `path.userData.style` object.
+	 * @param {number} [arcDivisions=12] - Arc divisions for round joins and endcaps.
+	 * @param {number} [minDistance=0.001] - Points closer to this distance will be merged.
+	 * @param {Array<number>} vertices - An array holding vertices.
+	 * @param {Array<number>} normals - An array holding normals.
+	 * @param {Array<number>} uvs - An array holding uvs.
+	 * @param {number} [vertexOffset=0] - The vertex offset.
+	 * @return {number} The number of vertices.
+	 */
+	static pointsToStrokeWithBuffers( points, style, arcDivisions, minDistance, vertices, normals, uvs, vertexOffset ) {
 
 		// This function can be called to update existing arrays or buffers.
 		// Accepts same parameters as pointsToStroke, plus the buffers and optional offset.
@@ -1263,6 +2308,24 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 		// if 'vertices' parameter is undefined no triangles will be generated, but the returned vertices count will still be valid (useful to preallocate the buffers)
 		// 'normals' and 'uvs' buffers are optional
 
+		const tempV2_1 = new Vector2();
+		const tempV2_2 = new Vector2();
+		const tempV2_3 = new Vector2();
+		const tempV2_4 = new Vector2();
+		const tempV2_5 = new Vector2();
+		const tempV2_6 = new Vector2();
+		const tempV2_7 = new Vector2();
+		const lastPointL = new Vector2();
+		const lastPointR = new Vector2();
+		const point0L = new Vector2();
+		const point0R = new Vector2();
+		const currentPointL = new Vector2();
+		const currentPointR = new Vector2();
+		const nextPointL = new Vector2();
+		const nextPointR = new Vector2();
+		const innerPoint = new Vector2();
+		const outerPoint = new Vector2();
+
 		arcDivisions = arcDivisions !== undefined ? arcDivisions : 12;
 		minDistance = minDistance !== undefined ? minDistance : 0.001;
 		vertexOffset = vertexOffset !== undefined ? vertexOffset : 0;
@@ -1270,29 +2333,29 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 		// First ensure there are no duplicated points
 		points = removeDuplicatedPoints( points );
 
-		var numPoints = points.length;
+		const numPoints = points.length;
 
 		if ( numPoints < 2 ) return 0;
 
-		var isClosed = points[ 0 ].equals( points[ numPoints - 1 ] );
+		const isClosed = points[ 0 ].equals( points[ numPoints - 1 ] );
 
-		var currentPoint;
-		var previousPoint = points[ 0 ];
-		var nextPoint;
+		let currentPoint;
+		let previousPoint = points[ 0 ];
+		let nextPoint;
 
-		var strokeWidth2 = style.strokeWidth / 2;
+		const strokeWidth2 = style.strokeWidth / 2;
 
-		var deltaU = 1 / ( numPoints - 1 );
-		var u0 = 0;
+		const deltaU = 1 / ( numPoints - 1 );
+		let u0 = 0, u1;
 
-		var innerSideModified;
-		var joinIsOnLeftSide;
-		var isMiter;
-		var initialJoinIsOnLeftSide = false;
+		let innerSideModified;
+		let joinIsOnLeftSide;
+		let isMiter;
+		let initialJoinIsOnLeftSide = false;
 
-		var numVertices = 0;
-		var currentCoordinate = vertexOffset * 3;
-		var currentCoordinateUV = vertexOffset * 2;
+		let numVertices = 0;
+		let currentCoordinate = vertexOffset * 3;
+		let currentCoordinateUV = vertexOffset * 2;
 
 		// Get initial left and right stroke points
 		getNormal( points[ 0 ], points[ 1 ], tempV2_1 ).multiplyScalar( strokeWidth2 );
@@ -1301,7 +2364,7 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 		point0L.copy( lastPointL );
 		point0R.copy( lastPointR );
 
-		for ( var iPoint = 1; iPoint < numPoints; iPoint ++ ) {
+		for ( let iPoint = 1; iPoint < numPoints; iPoint ++ ) {
 
 			currentPoint = points[ iPoint ];
 
@@ -1322,14 +2385,14 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 			}
 
 			// Normal of previous segment in tempV2_1
-			var normal1 = tempV2_1;
+			const normal1 = tempV2_1;
 			getNormal( previousPoint, currentPoint, normal1 );
 
 			tempV2_3.copy( normal1 ).multiplyScalar( strokeWidth2 );
 			currentPointL.copy( currentPoint ).sub( tempV2_3 );
 			currentPointR.copy( currentPoint ).add( tempV2_3 );
 
-			var u1 = u0 + deltaU;
+			u1 = u0 + deltaU;
 
 			innerSideModified = false;
 
@@ -1349,26 +2412,27 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 					joinIsOnLeftSide = false;
 
 				}
+
 				if ( iPoint === 1 ) initialJoinIsOnLeftSide = joinIsOnLeftSide;
 
 				tempV2_3.subVectors( nextPoint, currentPoint );
 				tempV2_3.normalize();
-				var dot = Math.abs( normal1.dot( tempV2_3 ) );
+				const dot = Math.abs( normal1.dot( tempV2_3 ) );
 
 				// If path is straight, don't create join
-				if ( dot !== 0 ) {
+				if ( dot > Number.EPSILON ) {
 
 					// Compute inner and outer segment intersections
-					var miterSide = strokeWidth2 / dot;
+					const miterSide = strokeWidth2 / dot;
 					tempV2_3.multiplyScalar( - miterSide );
 					tempV2_4.subVectors( currentPoint, previousPoint );
 					tempV2_5.copy( tempV2_4 ).setLength( miterSide ).add( tempV2_3 );
 					innerPoint.copy( tempV2_5 ).negate();
-					var miterLength2 = tempV2_5.length();
-					var segmentLengthPrev = tempV2_4.length();
+					const miterLength2 = tempV2_5.length();
+					const segmentLengthPrev = tempV2_4.length();
 					tempV2_4.divideScalar( segmentLengthPrev );
 					tempV2_6.subVectors( nextPoint, currentPoint );
-					var segmentLengthNext = tempV2_6.length();
+					const segmentLengthNext = tempV2_6.length();
 					tempV2_6.divideScalar( segmentLengthNext );
 					// Check that previous and next segments doesn't overlap with the innerPoint of intersection
 					if ( tempV2_4.dot( innerPoint ) < segmentLengthPrev && tempV2_6.dot( innerPoint ) < segmentLengthNext ) {
@@ -1376,8 +2440,25 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 						innerSideModified = true;
 
 					}
+
 					outerPoint.copy( tempV2_5 ).add( currentPoint );
 					innerPoint.add( currentPoint );
+
+					// in-loop fold detection to mitigate #25326
+					if ( innerSideModified ) {
+
+						//  when the second triangle's signed area would flip, snap innerPoint to the previous inner-side vertex
+
+						const refPt = joinIsOnLeftSide ? lastPointR : lastPointL;
+						const foldCross = ( outerPoint.x - refPt.x ) * ( innerPoint.y - refPt.y )
+							- ( outerPoint.y - refPt.y ) * ( innerPoint.x - refPt.x );
+						if ( ( joinIsOnLeftSide && foldCross < 0 ) || ( ! joinIsOnLeftSide && foldCross > 0 ) ) {
+
+							innerPoint.copy( refPt );
+
+						}
+
+					}
 
 					isMiter = false;
 
@@ -1435,7 +2516,7 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 						case 'miter-clip':
 						default:
 
-							var miterFraction = ( strokeWidth2 * style.strokeMiterLimit ) / miterLength2;
+							const miterFraction = ( strokeWidth2 * style.strokeMiterLimit ) / miterLength2;
 
 							if ( miterFraction < 1 ) {
 
@@ -1613,8 +2694,8 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 			// Modify path first segment vertices to adjust to the segments inner and outer intersections
 
-			var lastOuter = outerPoint;
-			var lastInner = innerPoint;
+			let lastOuter = outerPoint;
+			let lastInner = innerPoint;
 
 			if ( initialJoinIsOnLeftSide !== joinIsOnLeftSide ) {
 
@@ -1625,23 +2706,57 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 			if ( joinIsOnLeftSide ) {
 
-				lastInner.toArray( vertices, 0 * 3 );
-				lastInner.toArray( vertices, 3 * 3 );
+				if ( isMiter || initialJoinIsOnLeftSide ) {
 
-				if ( isMiter ) {
+					lastInner.toArray( vertices, 0 * 3 );
+					lastInner.toArray( vertices, 3 * 3 );
 
-					lastOuter.toArray( vertices, 1 * 3 );
+					if ( isMiter ) {
+
+						lastOuter.toArray( vertices, 1 * 3 );
+
+					}
 
 				}
 
 			} else {
 
-				lastInner.toArray( vertices, 1 * 3 );
-				lastInner.toArray( vertices, 3 * 3 );
+				if ( isMiter || ! initialJoinIsOnLeftSide ) {
 
-				if ( isMiter ) {
+					lastInner.toArray( vertices, 1 * 3 );
+					lastInner.toArray( vertices, 3 * 3 );
 
-					lastOuter.toArray( vertices, 0 * 3 );
+					if ( isMiter ) {
+
+						lastOuter.toArray( vertices, 0 * 3 );
+
+					}
+
+				}
+
+			}
+
+		}
+
+		// Second fix for #25326: Scan for reamining flipped (CW) triangles and collapse them to
+		// degenerated ones. This is safe and leaves no "holes" in the stroke because the flipped
+		// triangle's area is covered by neighbouring (CCW) triangles.
+
+		if ( vertices ) {
+
+			const tri = [ new Vector2(), new Vector2(), new Vector2() ];
+			const startFloat = vertexOffset * 3;
+
+			for ( let t = startFloat; t < currentCoordinate; t += 9 ) {
+
+				tri[ 0 ].set( vertices[ t ], vertices[ t + 1 ] );
+				tri[ 1 ].set( vertices[ t + 3 ], vertices[ t + 4 ] );
+				tri[ 2 ].set( vertices[ t + 6 ], vertices[ t + 7 ] );
+
+				if ( ShapeUtils.area( tri ) < 0 ) {
+
+					vertices[ t + 3 ] = tri[ 0 ].x;
+					vertices[ t + 4 ] = tri[ 0 ].y;
 
 				}
 
@@ -1703,15 +2818,15 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 			tempV2_1.copy( p1 ).sub( center ).normalize();
 			tempV2_2.copy( p2 ).sub( center ).normalize();
 
-			var angle = Math.PI;
-			var dot = tempV2_1.dot( tempV2_2 );
+			let angle = Math.PI;
+			const dot = tempV2_1.dot( tempV2_2 );
 			if ( Math.abs( dot ) < 1 ) angle = Math.abs( Math.acos( dot ) );
 
 			angle /= arcDivisions;
 
 			tempV2_3.copy( p1 );
 
-			for ( var i = 0, il = arcDivisions - 1; i < il; i ++ ) {
+			for ( let i = 0, il = arcDivisions - 1; i < il; i ++ ) {
 
 				tempV2_4.copy( tempV2_3 ).rotateAround( center, angle );
 
@@ -1723,7 +2838,7 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 			}
 
-			addVertex( tempV2_4, u, v );
+			addVertex( tempV2_3, u, v );
 			addVertex( p2, u, v );
 			addVertex( center, u, 0.5 );
 
@@ -1736,8 +2851,8 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 			addVertex( currentPointL, u1, 0 );
 
 			addVertex( lastPointR, u0, 1 );
-			addVertex( currentPointL, u1, 1 );
-			addVertex( currentPointR, u1, 0 );
+			addVertex( currentPointL, u1, 0 );
+			addVertex( currentPointR, u1, 1 );
 
 		}
 
@@ -1780,8 +2895,8 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 					// Bevel join triangle
 
 					addVertex( currentPointR, u, 1 );
-					addVertex( nextPointR, u, 0 );
-					addVertex( innerPoint, u, 0.5 );
+					addVertex( innerPoint, u, 0 );
+					addVertex( nextPointR, u, 1 );
 
 				}
 
@@ -1894,7 +3009,8 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 						} else {
 
 							tempV2_3.toArray( vertices, 1 * 3 );
-							tempV2_3.toArray( vertices, 3 * 3 );
+							// using tempV2_4 to update 3rd vertex if the uv.y of 3rd vertex is 1
+							uvs[ 3 * 2 + 1 ] === 1 ? tempV2_4.toArray( vertices, 3 * 3 ) : tempV2_3.toArray( vertices, 3 * 3 );
 							tempV2_4.toArray( vertices, 0 * 3 );
 
 						}
@@ -1907,7 +3023,7 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 						tempV2_3.addVectors( tempV2_1, tempV2_2 ).add( center );
 						tempV2_4.subVectors( tempV2_2, tempV2_1 ).add( center );
 
-						var vl = vertices.length;
+						const vl = vertices.length;
 
 						// Modify already existing vertices
 						if ( joinIsOnLeftSide ) {
@@ -1918,8 +3034,8 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 						} else {
 
-							tempV2_3.toArray( vertices, vl - 2 * 3 );
-							tempV2_4.toArray( vertices, vl - 1 * 3 );
+							tempV2_4.toArray( vertices, vl - 2 * 3 );
+							tempV2_3.toArray( vertices, vl - 1 * 3 );
 							tempV2_4.toArray( vertices, vl - 4 * 3 );
 
 						}
@@ -1943,8 +3059,8 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 			// Creates a new array if necessary with duplicated points removed.
 			// This does not remove duplicated initial and ending points of a closed path.
 
-			var dupPoints = false;
-			for ( var i = 1, n = points.length - 1; i < n; i ++ ) {
+			let dupPoints = false;
+			for ( let i = 1, n = points.length - 1; i < n; i ++ ) {
 
 				if ( points[ i ].distanceTo( points[ i + 1 ] ) < minDistance ) {
 
@@ -1957,10 +3073,10 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 			if ( ! dupPoints ) return points;
 
-			var newPoints = [];
+			const newPoints = [];
 			newPoints.push( points[ 0 ] );
 
-			for ( var i = 1, n = points.length - 1; i < n; i ++ ) {
+			for ( let i = 1, n = points.length - 1; i < n; i ++ ) {
 
 				if ( points[ i ].distanceTo( points[ i + 1 ] ) >= minDistance ) {
 
@@ -1976,8 +3092,206 @@ SVGLoader.pointsToStrokeWithBuffers = function () {
 
 		}
 
-	};
+	}
 
-}();
+}
+
+const GRADIENT_URL_RE = /^\s*url\(\s*(?:["']\s*)?#([^)'"\s]+)(?:\s*["'])?\s*\)\s*$/;
+
+// Bakes a gradient into a CanvasTexture in its own local frame and configures
+// `texture.matrix` (with `matrixAutoUpdate = false`) so that shape-space UVs —
+// which, because transformPath bakes the world matrix into geometry vertex
+// positions, equal world xy — sample the correct gradient color. The caller
+// just sets `material.map = texture`; no bounding box, no geometry, no
+// per-vertex UV work required.
+function buildGradientTexture( gradient, shapePath, resolution = 256 ) {
+
+	if ( ! gradient || ! Array.isArray( gradient.stops ) || gradient.stops.length === 0 ) return null;
+
+	const worldTransform = shapePath.userData.transform;
+	const isBBoxUnits = gradient.gradientUnits === 'objectBoundingBox';
+
+	// For objectBoundingBox gradients we need the element's local bounding
+	// box. Path points are in world space (transformPath already applied the
+	// world transform), so invert that first.
+	let localBBox = null;
+
+	if ( isBBoxUnits ) {
+
+		localBBox = computeLocalBBox( shapePath, worldTransform );
+		if ( localBBox === null ) return null;
+
+	}
+
+	// Resolves a gradient-space point to the geometry's (world) coordinate
+	// space: gradient coord → gradientTransform → target coord → (for
+	// objectBoundingBox: bbox → local) → worldTransform → world.
+	function resolvePoint( x, y, out ) {
+
+		out.set( x, y, 1 );
+		if ( gradient.gradientTransform ) out.applyMatrix3( gradient.gradientTransform );
+		if ( isBBoxUnits ) out.set(
+			localBBox.minX + out.x * localBBox.width,
+			localBBox.minY + out.y * localBBox.height,
+			1,
+		);
+		if ( worldTransform ) out.applyMatrix3( worldTransform );
+
+	}
+
+	const canvas = document.createElement( 'canvas' );
+	let textureMatrix;
+
+	if ( gradient.type === 'linearGradient' ) {
+
+		// 1D bake along the gradient vector.
+		canvas.width = resolution;
+		canvas.height = 1;
+		const ctx = canvas.getContext( '2d' );
+
+		const grad = ctx.createLinearGradient( 0, 0, resolution, 0 );
+		addStops( grad, gradient.stops );
+		ctx.fillStyle = grad;
+		ctx.fillRect( 0, 0, resolution, 1 );
+
+		const p1 = new Vector3();
+		const p2 = new Vector3();
+		resolvePoint( gradient.x1, gradient.y1, p1 );
+		resolvePoint( gradient.x2, gradient.y2, p2 );
+
+		const dx = p2.x - p1.x;
+		const dy = p2.y - p1.y;
+		const len2 = dx * dx + dy * dy || 1e-20;
+		const a = dx / len2;
+		const b = dy / len2;
+		const c = - ( a * p1.x + b * p1.y );
+
+		// M * (vx, vy, 1) = (t, 0.5, 1)
+		textureMatrix = new Matrix3().set(
+			a, b, c,
+			0, 0, 0.5,
+			0, 0, 1,
+		);
+
+	} else {
+
+		// Resolve cx/cy/fx/fy into local space and scale r per the SVG spec
+		// (objectBoundingBox scales lengths by sqrt((w² + h²) / 2)). The canvas
+		// only draws circular radial gradients, so any ellipticity induced by
+		// a non-uniform world transform is picked up later via the UV matrix.
+		let cx = gradient.cx, cy = gradient.cy;
+		let fx = gradient.fx, fy = gradient.fy;
+		let r = gradient.r;
+
+		if ( gradient.gradientTransform ) {
+
+			const tmp = new Vector3();
+			tmp.set( cx, cy, 1 ).applyMatrix3( gradient.gradientTransform );
+			cx = tmp.x; cy = tmp.y;
+			tmp.set( fx, fy, 1 ).applyMatrix3( gradient.gradientTransform );
+			fx = tmp.x; fy = tmp.y;
+
+		}
+
+		if ( isBBoxUnits ) {
+
+			cx = localBBox.minX + cx * localBBox.width;
+			cy = localBBox.minY + cy * localBBox.height;
+			fx = localBBox.minX + fx * localBBox.width;
+			fy = localBBox.minY + fy * localBBox.height;
+			r = r * Math.sqrt( ( localBBox.width * localBBox.width + localBBox.height * localBBox.height ) / 2 );
+
+		}
+
+		if ( r <= 0 ) return null;
+
+		// 2D bake in the gradient's local frame, covering [cx-r, cx+r]².
+		canvas.width = resolution;
+		canvas.height = resolution;
+		const ctx = canvas.getContext( '2d' );
+
+		const localMinX = cx - r;
+		const localMinY = cy - r;
+		const localSpan = 2 * r;
+		const scale = resolution / localSpan;
+
+		// Canvas pixel = (local - localMin) * scale.
+		ctx.setTransform( scale, 0, 0, scale, - localMinX * scale, - localMinY * scale );
+
+		const grad = ctx.createRadialGradient( fx, fy, 0, cx, cy, r );
+		addStops( grad, gradient.stops );
+		ctx.fillStyle = grad;
+		ctx.fillRect( localMinX, localMinY, localSpan, localSpan );
+
+		// UV matrix: world → local (via worldTransform⁻¹) → normalized canvas UV.
+		const inv = worldTransform ? worldTransform.clone().invert() : new Matrix3();
+		const norm = new Matrix3().set(
+			1 / localSpan, 0, - localMinX / localSpan,
+			0, 1 / localSpan, - localMinY / localSpan,
+			0, 0, 1,
+		);
+		textureMatrix = norm.multiply( inv );
+
+	}
+
+	const texture = new CanvasTexture( canvas );
+	texture.colorSpace = COLOR_SPACE_SVG;
+	texture.flipY = false;
+	texture.matrixAutoUpdate = false;
+	texture.matrix = textureMatrix;
+
+	const wrap = gradient.spreadMethod === 'reflect' ? MirroredRepeatWrapping
+		: gradient.spreadMethod === 'repeat' ? RepeatWrapping
+			: ClampToEdgeWrapping;
+	texture.wrapS = wrap;
+	texture.wrapT = wrap;
+
+	return texture;
+
+}
+
+function computeLocalBBox( shapePath, worldTransform ) {
+
+	const inv = worldTransform ? worldTransform.clone().invert() : null;
+	const tmp = new Vector2();
+	const box = new Box2();
+
+	for ( const subPath of shapePath.subPaths ) {
+
+		for ( const p of subPath.getPoints() ) {
+
+			tmp.copy( p );
+			if ( inv ) tmp.applyMatrix3( inv );
+			box.expandByPoint( tmp );
+
+		}
+
+	}
+
+	if ( box.isEmpty() ) return null;
+
+	return { minX: box.min.x, minY: box.min.y, width: box.max.x - box.min.x, height: box.max.y - box.min.y };
+
+}
+
+function addStops( canvasGradient, stops ) {
+
+	const tmpColor = new Color();
+	for ( const stop of stops ) {
+
+		let css = stop.color;
+		if ( stop.opacity < 1 ) {
+
+			tmpColor.setStyle( stop.color, COLOR_SPACE_SVG );
+			const m = /rgb\(([^)]+)\)/.exec( tmpColor.getStyle( COLOR_SPACE_SVG ) );
+			if ( m ) css = `rgba(${m[ 1 ]},${stop.opacity})`;
+
+		}
+
+		canvasGradient.addColorStop( Math.max( 0, Math.min( 1, stop.offset ) ), css );
+
+	}
+
+}
 
 export { SVGLoader };

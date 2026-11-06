@@ -1,7 +1,7 @@
 export default /* glsl */`
-#ifdef USE_COLOR
+#if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
 
-	diffuseColor.rgb *= vColor;
+	diffuseColor *= vColor;
 
 #endif
 `;

@@ -1,18 +1,14 @@
-/**
- * @author TristanVALCKE / https://github.com/Itee
- */
-/* global QUnit */
+import { LatheGeometry } from '../../../../src/geometries/LatheGeometry.js';
 
-import { runStdGeometryTests } from '../../qunit-utils';
-import {
-	LatheBufferGeometry
-} from '../../../../src/geometries/LatheGeometry';
+import { BufferGeometry } from '../../../../src/core/BufferGeometry.js';
+import { Vector3 } from '../../../../src/math/Vector3.js';
+import { runStdGeometryTests } from '../../utils/qunit-utils.js';
 
 export default QUnit.module( 'Geometries', () => {
 
-	QUnit.module( 'LatheBufferGeometry', ( hooks ) => {
+	QUnit.module( 'LatheGeometry', ( hooks ) => {
 
-		var geometries = undefined;
+		let geometries = undefined;
 		hooks.beforeEach( function () {
 
 			const parameters = {
@@ -23,23 +19,38 @@ export default QUnit.module( 'Geometries', () => {
 			};
 
 			geometries = [
-				//				new LatheBufferGeometry(), // Todo: error for undefined point
-				new LatheBufferGeometry( parameters.points )
+				new LatheGeometry( parameters.points ),
 			];
 
 		} );
 
 		// INHERITANCE
-		QUnit.todo( "Extending", ( assert ) => {
+		QUnit.test( 'Extending', ( assert ) => {
 
-			assert.ok( false, "everything's gonna be alright" );
+			const object = new LatheGeometry();
+			assert.strictEqual(
+				object instanceof BufferGeometry, true,
+				'LatheGeometry extends from BufferGeometry'
+			);
 
 		} );
 
 		// INSTANCING
-		QUnit.todo( "Instancing", ( assert ) => {
+		QUnit.test( 'Instancing', ( assert ) => {
 
-			assert.ok( false, "everything's gonna be alright" );
+			const object = new LatheGeometry();
+			assert.ok( object, 'Can instantiate a LatheGeometry.' );
+
+		} );
+
+		// PROPERTIES
+		QUnit.test( 'type', ( assert ) => {
+
+			const object = new LatheGeometry();
+			assert.ok(
+				object.type === 'LatheGeometry',
+				'LatheGeometry.type should be LatheGeometry'
+			);
 
 		} );
 
@@ -47,6 +58,24 @@ export default QUnit.module( 'Geometries', () => {
 		QUnit.test( 'Standard geometry tests', ( assert ) => {
 
 			runStdGeometryTests( assert, geometries );
+
+		} );
+
+		QUnit.test( 'normals', ( assert ) => {
+
+			const normals = new LatheGeometry().getAttribute( 'normal' );
+			const normal = new Vector3();
+			let nonUnitNormals = 0;
+
+			for ( let i = 0; i < normals.count; i ++ ) {
+
+				normal.fromBufferAttribute( normals, i );
+
+				if ( Math.abs( normal.length() - 1 ) > 1e-6 ) nonUnitNormals ++;
+
+			}
+
+			assert.strictEqual( nonUnitNormals, 0, 'All normals have unit length.' );
 
 		} );
 

@@ -1,12 +1,13 @@
-/**
- * @author TyLindberg / https://github.com/TyLindberg
- */
+import { UIPanel, UIText, UIRow, UIInput } from './libs/ui.js';
 
-Sidebar.Settings.Shortcuts = function ( editor ) {
+import { MultiCmdsCommand } from './commands/MultiCmdsCommand.js';
+import { RemoveObjectCommand } from './commands/RemoveObjectCommand.js';
 
-	var strings = editor.strings;
+function SidebarSettingsShortcuts( editor ) {
 
-	var IS_MAC = navigator.platform.toUpperCase().indexOf( 'MAC' ) >= 0;
+	const strings = editor.strings;
+
+	const IS_MAC = navigator.platform.toUpperCase().indexOf( 'MAC' ) >= 0;
 
 	function isValidKeyBinding( key ) {
 
@@ -14,24 +15,28 @@ Sidebar.Settings.Shortcuts = function ( editor ) {
 
 	}
 
-	var config = editor.config;
-	var signals = editor.signals;
+	const config = editor.config;
+	const signals = editor.signals;
 
-	var container = new UI.Div();
-	container.add( new UI.Break() );
+	const container = new UIPanel();
 
-	var shortcuts = [ 'translate', 'rotate', 'scale', 'undo', 'focus' ];
+	const headerRow = new UIRow();
+	headerRow.add( new UIText( strings.getKey( 'sidebar/settings/shortcuts' ).toUpperCase() ) );
+	container.add( headerRow );
+
+	const shortcuts = [ 'translate', 'rotate', 'scale', 'undo', 'focus', 'perspective', 'orthographic', 'selectAll' ];
 
 	function createShortcutInput( name ) {
 
-		var configName = 'settings/shortcuts/' + name;
-		var shortcutRow = new UI.Row();
+		const configName = 'settings/shortcuts/' + name;
+		const shortcutRow = new UIRow();
 
-		var shortcutInput = new UI.Input().setWidth( '150px' ).setFontSize( '12px' );
+		const shortcutInput = new UIInput().setWidth( '15px' ).setFontSize( '12px' );
+		shortcutInput.setTextAlign( 'center' );
 		shortcutInput.setTextTransform( 'lowercase' );
 		shortcutInput.onChange( function () {
 
-			var value = shortcutInput.getValue().toLowerCase();
+			const value = shortcutInput.getValue().toLowerCase();
 
 			if ( isValidKeyBinding( value ) ) {
 
@@ -78,14 +83,14 @@ Sidebar.Settings.Shortcuts = function ( editor ) {
 		}
 
 		shortcutInput.dom.maxLength = 1;
-		shortcutRow.add( new UI.Text( strings.getKey( 'sidebar/settings/shortcuts/' + name ) ).setTextTransform( 'capitalize' ).setWidth( '90px' ) );
+		shortcutRow.add( new UIText( strings.getKey( 'sidebar/settings/shortcuts/' + name ) ).setTextTransform( 'capitalize' ).setClass( 'Label' ) );
 		shortcutRow.add( shortcutInput );
 
 		container.add( shortcutRow );
 
 	}
 
-	for ( var i = 0; i < shortcuts.length; i ++ ) {
+	for ( let i = 0; i < shortcuts.length; i ++ ) {
 
 		createShortcutInput( shortcuts[ i ] );
 
@@ -101,16 +106,80 @@ Sidebar.Settings.Shortcuts = function ( editor ) {
 
 				// fall-through
 
-			case 'delete':
+			case 'delete': {
 
-				var object = editor.selected;
+				const objects = editor.selector.selection;
 
-				if ( object === null ) return;
+				const commands = [];
 
-				var parent = object.parent;
-				if ( parent !== null ) editor.execute( new RemoveObjectCommand( editor, object ) );
+				for ( let i = 0; i < objects.length; i ++ ) {
+
+					const object = objects[ i ];
+
+					if ( object.parent === null ) continue; // avoid deleting the camera or scene
+
+					if ( object.isSpotLight || object.isDirectionalLight ) {
+
+						commands.push( new RemoveObjectCommand( editor, object ) );
+						commands.push( new RemoveObjectCommand( editor, object.target ) );
+
+					} else {
+
+						commands.push( new RemoveObjectCommand( editor, object ) );
+
+					}
+
+				}
+
+				if ( commands.length === 1 ) {
+
+					editor.execute( commands[ 0 ] );
+
+				} else if ( commands.length > 1 ) {
+
+					editor.execute( new MultiCmdsCommand( editor, commands ) );
+
+				}
 
 				break;
+
+			}
+
+			case config.getKey( 'settings/shortcuts/selectAll' ): {
+
+				if ( event.altKey === true || event.ctrlKey === true || event.metaKey === true ) break;
+
+				// toggle between selecting and deselecting all scene objects
+
+				const objects = editor.scene.children;
+				const selection = editor.selector.selection;
+
+				let allSelected = objects.length > 0;
+
+				for ( let i = 0; i < objects.length; i ++ ) {
+
+					if ( selection.indexOf( objects[ i ] ) === - 1 ) {
+
+						allSelected = false;
+						break;
+
+					}
+
+				}
+
+				if ( allSelected === true ) {
+
+					editor.deselect();
+
+				} else {
+
+					editor.selector.setSelection( objects );
+
+				}
+
+				break;
+
+			}
 
 			case config.getKey( 'settings/shortcuts/translate' ):
 
@@ -160,10 +229,24 @@ Sidebar.Settings.Shortcuts = function ( editor ) {
 
 				break;
 
+			case config.getKey( 'settings/shortcuts/perspective' ):
+
+				editor.setCameraType( 'perspective' );
+
+				break;
+
+			case config.getKey( 'settings/shortcuts/orthographic' ):
+
+				editor.setCameraType( 'orthographic' );
+
+				break;
+
 		}
 
-	}, false );
+	} );
 
 	return container;
 
-};
+}
+
+export { SidebarSettingsShortcuts };

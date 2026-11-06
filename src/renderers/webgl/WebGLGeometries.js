@@ -1,43 +1,51 @@
-/**
- * @author mrdoob / http://mrdoob.com/
- */
-
 import { Uint16BufferAttribute, Uint32BufferAttribute } from '../../core/BufferAttribute.js';
-import { BufferGeometry } from '../../core/BufferGeometry.js';
-import { arrayMax } from '../../utils.js';
 
-function WebGLGeometries( gl, attributes, info ) {
+function WebGLGeometries( gl, attributes, info, bindingStates ) {
 
-	var geometries = new WeakMap();
-	var wireframeAttributes = new WeakMap();
+	const geometries = {};
+	const wireframeAttributes = new WeakMap();
+
+	const registry = new FinalizationRegistry( ( id ) => delete geometries[ id ] );
 
 	function onGeometryDispose( event ) {
 
-		var geometry = event.target;
-		var buffergeometry = geometries.get( geometry );
+		destroyGeometry( event.target );
 
-		if ( buffergeometry.index !== null ) {
+	}
 
-			attributes.remove( buffergeometry.index );
+	function destroyGeometry( geometry ) {
+
+		if ( geometry.index !== null ) {
+
+			attributes.remove( geometry.index );
 
 		}
 
-		for ( var name in buffergeometry.attributes ) {
+		for ( const name in geometry.attributes ) {
 
-			attributes.remove( buffergeometry.attributes[ name ] );
+			attributes.remove( geometry.attributes[ name ] );
 
 		}
 
 		geometry.removeEventListener( 'dispose', onGeometryDispose );
 
-		geometries.delete( geometry );
+		delete geometries[ geometry.id ];
+		registry.unregister( geometry );
 
-		var attribute = wireframeAttributes.get( buffergeometry );
+		const attribute = wireframeAttributes.get( geometry );
 
 		if ( attribute ) {
 
 			attributes.remove( attribute );
-			wireframeAttributes.delete( buffergeometry );
+			wireframeAttributes.delete( geometry );
+
+		}
+
+		bindingStates.releaseStatesOfGeometry( geometry );
+
+		if ( geometry.isInstancedBufferGeometry === true ) {
+
+			delete geometry._maxInstanceCount;
 
 		}
 
@@ -49,66 +57,28 @@ function WebGLGeometries( gl, attributes, info ) {
 
 	function get( object, geometry ) {
 
-		var buffergeometry = geometries.get( geometry );
-
-		if ( buffergeometry ) return buffergeometry;
+		if ( geometries[ geometry.id ] !== undefined ) return geometry;
 
 		geometry.addEventListener( 'dispose', onGeometryDispose );
 
-		if ( geometry.isBufferGeometry ) {
-
-			buffergeometry = geometry;
-
-		} else if ( geometry.isGeometry ) {
-
-			if ( geometry._bufferGeometry === undefined ) {
-
-				geometry._bufferGeometry = new BufferGeometry().setFromObject( object );
-
-			}
-
-			buffergeometry = geometry._bufferGeometry;
-
-		}
-
-		geometries.set( geometry, buffergeometry );
+		geometries[ geometry.id ] = new WeakRef( geometry );
+		registry.register( geometry, geometry.id, geometry );
 
 		info.memory.geometries ++;
 
-		return buffergeometry;
+		return geometry;
 
 	}
 
 	function update( geometry ) {
 
-		var index = geometry.index;
-		var geometryAttributes = geometry.attributes;
+		const geometryAttributes = geometry.attributes;
 
-		if ( index !== null ) {
+		// Updating index buffer in VAO now. See WebGLBindingStates.
 
-			attributes.update( index, gl.ELEMENT_ARRAY_BUFFER );
-
-		}
-
-		for ( var name in geometryAttributes ) {
+		for ( const name in geometryAttributes ) {
 
 			attributes.update( geometryAttributes[ name ], gl.ARRAY_BUFFER );
-
-		}
-
-		// morph targets
-
-		var morphAttributes = geometry.morphAttributes;
-
-		for ( var name in morphAttributes ) {
-
-			var array = morphAttributes[ name ];
-
-			for ( var i = 0, l = array.length; i < l; i ++ ) {
-
-				attributes.update( array[ i ], gl.ARRAY_BUFFER );
-
-			}
 
 		}
 
@@ -116,52 +86,66 @@ function WebGLGeometries( gl, attributes, info ) {
 
 	function updateWireframeAttribute( geometry ) {
 
-		var indices = [];
+		const geometryIndex = geometry.index;
+		const geometryPosition = geometry.attributes.position;
+		let version = 0;
 
-		var geometryIndex = geometry.index;
-		var geometryPosition = geometry.attributes.position;
-		var version = 0;
+		if ( geometryPosition === undefined ) {
+
+			return;
+
+		}
+
+		const count = geometryIndex !== null ? geometryIndex.array.length : ( geometryPosition.array.length / 3 ) - 1;
+
+		// check whether a 32 bit or 16 bit buffer is required to store the indices
+		// account for PRIMITIVE_RESTART_FIXED_INDEX, #24565
+		const IndexBufferAttribute = geometryPosition.count >= 65535 ? Uint32BufferAttribute : Uint16BufferAttribute;
+		const attribute = new IndexBufferAttribute( Math.ceil( count / 3 ) * 6, 1 );
+		const indices = attribute.array;
 
 		if ( geometryIndex !== null ) {
 
-			var array = geometryIndex.array;
+			const array = geometryIndex.array;
 			version = geometryIndex.version;
 
-			for ( var i = 0, l = array.length; i < l; i += 3 ) {
+			for ( let i = 0, j = 0; i < count; i += 3 ) {
 
-				var a = array[ i + 0 ];
-				var b = array[ i + 1 ];
-				var c = array[ i + 2 ];
+				const a = array[ i + 0 ];
+				const b = array[ i + 1 ];
+				const c = array[ i + 2 ];
 
-				indices.push( a, b, b, c, c, a );
+				indices[ j ++ ] = a; indices[ j ++ ] = b;
+				indices[ j ++ ] = b; indices[ j ++ ] = c;
+				indices[ j ++ ] = c; indices[ j ++ ] = a;
 
 			}
 
 		} else {
 
-			var array = geometryPosition.array;
 			version = geometryPosition.version;
 
-			for ( var i = 0, l = ( array.length / 3 ) - 1; i < l; i += 3 ) {
+			for ( let i = 0, j = 0; i < count; i += 3 ) {
 
-				var a = i + 0;
-				var b = i + 1;
-				var c = i + 2;
+				const a = i + 0;
+				const b = i + 1;
+				const c = i + 2;
 
-				indices.push( a, b, b, c, c, a );
+				indices[ j ++ ] = a; indices[ j ++ ] = b;
+				indices[ j ++ ] = b; indices[ j ++ ] = c;
+				indices[ j ++ ] = c; indices[ j ++ ] = a;
 
 			}
 
 		}
 
-		var attribute = new ( arrayMax( indices ) > 65535 ? Uint32BufferAttribute : Uint16BufferAttribute )( indices, 1 );
 		attribute.version = version;
 
-		attributes.update( attribute, gl.ELEMENT_ARRAY_BUFFER );
+		// Updating index buffer in VAO now. See WebGLBindingStates
 
 		//
 
-		var previousAttribute = wireframeAttributes.get( geometry );
+		const previousAttribute = wireframeAttributes.get( geometry );
 
 		if ( previousAttribute ) attributes.remove( previousAttribute );
 
@@ -173,11 +157,11 @@ function WebGLGeometries( gl, attributes, info ) {
 
 	function getWireframeAttribute( geometry ) {
 
-		var currentAttribute = wireframeAttributes.get( geometry );
+		const currentAttribute = wireframeAttributes.get( geometry );
 
 		if ( currentAttribute ) {
 
-			var geometryIndex = geometry.index;
+			const geometryIndex = geometry.index;
 
 			if ( geometryIndex !== null ) {
 
@@ -201,12 +185,26 @@ function WebGLGeometries( gl, attributes, info ) {
 
 	}
 
+	function dispose() {
+
+		for ( const id in geometries ) {
+
+			const geometry = geometries[ id ].deref();
+
+			if ( geometry !== undefined ) destroyGeometry( geometry );
+
+		}
+
+	}
+
 	return {
 
 		get: get,
 		update: update,
 
-		getWireframeAttribute: getWireframeAttribute
+		getWireframeAttribute: getWireframeAttribute,
+
+		dispose: dispose
 
 	};
 
